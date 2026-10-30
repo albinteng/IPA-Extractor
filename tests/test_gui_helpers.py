@@ -1,0 +1,274 @@
+import importlib.util
+import io
+import json
+import os
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+import app_info
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def code_directory(identifier, team):
+    header_size = 52
+    ident_offset = header_size
+    team_offset = ident_offset + len(identifier) + 1
+    body = identifier.encode() + b'\0' + team.encode() + b'\0'
+    # magic, length, version, flags, hashOffset, identOffset, nSpecialSlots, nCodeSlots,
+    # codeLimit, hashSize, hashType, platform, pageSize, spare2, scatterOffset, teamOffset
+    header = struct.pack('>IIIIIIIIIBBBBIII', app_info.CSMAGIC_CODEDIRECTORY, header_size + len(body),
+                         0x20200, 0, 0, ident_offset, 0, 0, 0, 0, 0, 0, 0, 0, 0, team_offset)
+    return header + body
+
+
+def superblob(directory):
+    offset = 12 + 8
+    return struct.pack('>IIIII', app_info.CSMAGIC_EMBEDDED_SIGNATURE, offset + len(directory), 1,
+                       app_info.CSSLOT_CODEDIRECTORY, offset) + directory
+
+
+def macho(cryptid, signature):
+    encryption = struct.pack('<IIIIII', app_info.LC_ENCRYPTION_INFO_64, 24, 0, 0, cryptid, 0)
+    commands_size = len(encryption) + 16
+    header = struct.pack('<IiiIIIII', 0xFEEDFACF, 0x0100000C, 0, 2, 2, commands_size, 0, 0)
+    data_offset = len(header) + commands_size
+    code_signature = struct.pack('<IIII', app_info.LC_CODE_SIGNATURE, 16, data_offset, len(signature))
+    return header + encryption + code_signature + signature
+
+
+class AppInfoTests(unittest.TestCase):
+    def test_reads_encryption_and_team(self):
+        binary = macho(1, superblob(code_directory('com.example.app', 'ABCDE12345')))
+        info = app_info.inspect_macho(io.BytesIO(binary))
+        self.assertEqual(info['encrypted'], True)
+        self.assertEqual(info['identifier'], 'com.example.app')
+        self.assertEqual(info['team_id'], 'ABCDE12345')
+
+    def test_selects_arm64_slice_of_fat_binary(self):
+        thin = macho(0, superblob(code_directory('com.example.app', 'TEAM')))
+        offset = 0x1000
+        fat = struct.pack('>II', 0xCAFEBABE, 2)
+        fat += struct.pack('>iiIII', 12, 9, offset + len(thin), 4, 14)  # armv7 (bogus offset)
+        fat += struct.pack('>iiIII', app_info.CPU_TYPE_ARM64, 0, offset, len(thin), 14)
+        data = fat.ljust(offset, b'\0') + thin
+        info = app_info.inspect_macho(io.BytesIO(data))
+        self.assertEqual(info['encrypted'], False)
+        self.assertEqual(info['team_id'], 'TEAM')
+        self.assertEqual(info['archs'], ['armv7', 'arm64'])
+        self.assertEqual(app_info.arch_bits(info['archs']), 0)
+
+    def test_architectures(self):
+        self.assertEqual(app_info.arch_name(app_info.CPU_TYPE_ARM64, -0x7FFFFFFE), 'arm64e')  # capability bit set
+        self.assertEqual(app_info.arch_bits(['armv7', 'armv7s']), 32)
+        self.assertEqual(app_info.arch_bits(['arm64', 'arm64e']), 64)
+        self.assertEqual(app_info.arch_bits(['arm64_32']), 32)
+
+    def test_default_names_are_windows_safe(self):
+        name = app_info.format_ipa_name(app_info.DEFAULT_DECRYPTED_NAME, 'A:B/C?', 'com.x', '1.0')
+        self.assertEqual(name, 'A_B_C__com.x_1.0_decrypted')
+        self.assertEqual(app_info.format_ipa_name(app_info.DEFAULT_DECRYPTED_NAME, 'App', 'com.x', ''),
+                         'App_com.x_unknown_decrypted')
+
+    def test_name_templates(self):
+        name = app_info.format_ipa_name('{bundle}-{version} ({build}) {type}', 'A/B', 'com.x', '1.0', '7', 'encrypted')
+        self.assertEqual(name, 'com.x-1.0 (7) encrypted')
+        self.assertEqual(app_info.format_ipa_name(app_info.DEFAULT_ORIGINAL_NAME, 'A/B', 'com.x', '1.0', kind='original'),
+                         'A_B_com.x_1.0_original')
+        for template, key in (('{foo}', 'name_unknown'), ('{name', 'name_braces'), ('  ', 'name_empty'),
+                              ('{name.upper}', 'name_unknown'), ('{name:d}', 'name_braces'),
+                              ('{name!x}', 'name_braces'), ('{name:{bundle}}', 'name_braces')):
+            with self.assertRaises(app_info.NameTemplateError) as caught:
+                app_info.check_name_template(template)
+            self.assertEqual(caught.exception.args[0], key, template)
+
+
+class DumpDirTests(unittest.TestCase):
+    def test_status(self):
+        import ipa_extractor
+        with tempfile.TemporaryDirectory() as path:
+            self.assertEqual(ipa_extractor.dump_dir_status(''), 'empty')
+            self.assertEqual(ipa_extractor.dump_dir_status(os.path.join(path, 'missing')), 'missing')
+            for name in ('dump.py', 'dump.js'):
+                open(os.path.join(path, name), 'w').close()
+            self.assertEqual(ipa_extractor.dump_dir_status(path), 'no_bridge')
+            os.makedirs(os.path.join(path, 'node_modules', 'frida-objc-bridge'))
+            self.assertEqual(ipa_extractor.dump_dir_status(path), 'ok')
+
+
+class ErrorClassificationTests(unittest.TestCase):
+    def test_known_errors(self):
+        import ipa_extractor
+        cases = {
+            'frida.NotSupportedError: unable to launch iOS app via FBS: '
+            'The operation couldn’t be completed. Application failed preflight checks': 'preflight',
+            'frida.TransportError: timeout was reached': 'timeout',
+            'frida.TransportError: the connection is closed': 'closed',
+            'frida.InvalidOperationError: session is gone': 'session',
+            'frida.NotSupportedError: unexpected error while resuming process: (os/kern) failure': 'resume',
+            'frida.ServerNotRunningError: unable to connect to remote frida-server': 'server',
+            "FileNotFoundError: [Errno 2] No such file or directory: 'Payload'": 'path',
+            'something else': None,
+        }
+        for message, kind in cases.items():
+            self.assertEqual(ipa_extractor.classify_error(message), kind, message)
+
+
+class WorkerTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows only')
+    @unittest.skipUnless(importlib.util.find_spec('scp'), 'scp is installed by Install Frida dependencies')
+    def test_long_paths_keep_scp_directory_target(self):
+        code = ('import dump_worker, tempfile, scp\n'
+                'dump_worker.use_long_paths()\n'
+                'seen = []\n'
+                'scp.SCPClient.__bases__[0].get = lambda self, r, l="", *a, **k: seen.append(l)\n'
+                'client = scp.SCPClient.__new__(scp.SCPClient)\n'
+                'client.get("x", tempfile.gettempdir() + "\\\\Payload/")\n'
+                'print(tempfile.gettempdir().startswith(dump_worker.EXTENDED_PREFIX), seen[0].endswith("Payload"))\n')
+        output = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True,
+                                text=True, check=True).stdout
+        self.assertEqual(output.split(), ['True', 'True'])
+
+    def test_reports_progress_as_json_lines(self):
+        code = ('import dump_worker, sys, types\n'
+                'bar = dump_worker.ProgressBar(total=10)\n'
+                'bar.set_description_str("App resources")\n'
+                'bar.update(10)\n'
+                'bar.close()\n'
+                'dump_worker.ProgressBar.write("hello")\n')
+        output = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True,
+                                text=True, check=True).stdout
+        events = [json.loads(line[2:]) for line in output.splitlines() if line.startswith('@@')]
+        self.assertEqual(events[-2]['n'], 10)
+        self.assertTrue(events[-2]['closed'])
+        self.assertEqual(events[-1], {'type': 'log', 'text': 'hello'})
+
+
+class LocaleTests(unittest.TestCase):
+    def test_every_language_matches_english(self):
+        import string
+        import i18n
+        locales = i18n.load_locales()
+        english = locales[i18n.FALLBACK]
+
+        def fields(text):
+            return {field for _, field, _, _ in string.Formatter().parse(text) if field}
+
+        for code, strings in locales.items():
+            self.assertIn('_name', strings, code)
+            self.assertEqual(set(strings) - set(english), set(), code)  # no stray keys
+            for key, text in strings.items():
+                if not key.startswith('_'):
+                    self.assertEqual(fields(text), fields(english[key]), '{} {}'.format(code, key))
+
+    def test_language_matching(self):
+        import i18n
+        locales = i18n.load_locales()
+        self.assertEqual(i18n.resolve(locales, 'xx'), i18n.FALLBACK)
+        self.assertEqual(i18n.match_language(locales, 'zh-Hant-HK'), 'zh-TW')
+        self.assertEqual(i18n.match_language(locales, 'zh-Hans-CN'), 'zh-CN')
+        self.assertEqual(i18n.match_language(locales, 'ja-JP'), 'ja')
+        self.assertEqual(i18n.match_language({'pt-BR': {}, 'en': {}}, 'pt-PT'), 'pt-BR')
+        self.assertIsNone(i18n.match_language({'en': {}}, 'pt-PT'))
+
+
+class DisplayNameTests(unittest.TestCase):
+    def test_parse_strings(self):
+        import device_apps
+        text = '/* comment */\n"CFBundleDisplayName" = "A \\"B\\"";\nCFBundleName = "\\U00e9";\n'
+        self.assertEqual(device_apps.parse_strings(text.encode()),
+                         {'CFBundleDisplayName': 'A "B"', 'CFBundleName': '\u00e9'})
+        self.assertEqual(device_apps.parse_strings('"CFBundleName" = "\u540d";'.encode('utf-16')),
+                         {'CFBundleName': '\u540d'})
+        self.assertEqual(device_apps.parse_strings(b'\xff\xfe\x00\xd8'), {})  # broken UTF-16
+
+    def test_lproj_candidates(self):
+        import device_apps
+        self.assertEqual(device_apps.lproj_candidates('zh-Hant-TW')[:3], ['zh-Hant-TW', 'zh-Hant', 'zh_TW'])
+        self.assertIn('Japanese', device_apps.lproj_candidates('ja-JP'))
+
+
+class FakeSSH:
+    """Just enough of paramiko's SSHClient, Transport and Channel for ipa_extract."""
+
+    def __init__(self, tar_data):
+        self.stream = io.BytesIO(tar_data)
+        self.channel = self
+
+    def get_transport(self):
+        return self
+
+    def open_session(self, timeout=None):
+        return self
+
+    def exec_command(self, command, timeout=None):
+        if 'tar ' in command:
+            return None, self, io.BytesIO()
+        return None
+
+    def settimeout(self, timeout):
+        pass
+
+    def set_combine_stderr(self, combine):
+        pass
+
+    def makefile(self, mode):
+        return io.BytesIO(b'iTunesMetadata.plist\n12\tX.app\n')  # ls and du output
+
+    def read(self, size=-1):
+        return self.stream.read(size)
+
+    def recv_exit_status(self):
+        return 0
+
+    def close(self):
+        pass
+
+
+class ExtractTests(unittest.TestCase):
+    @staticmethod
+    def tar(extra=None):
+        import tarfile
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w') as tar:
+            for name, data in (('X.app/Info.plist', b'plist'), ('X.app/X', b'exe'), ('iTunesMetadata.plist', b'meta')):
+                info = tarfile.TarInfo(name)
+                info.size, info.mode = len(data), 0o755
+                tar.addfile(info, io.BytesIO(data))
+            link = tarfile.TarInfo('X.app/Current')
+            link.type, link.linkname = tarfile.SYMTYPE, 'X'
+            tar.addfile(link)
+            if extra is not None:
+                tar.addfile(extra)
+        return buffer.getvalue()
+
+    def test_streams_bundle_into_ipa(self):
+        import ipa_extract
+        import zipfile
+        with tempfile.TemporaryDirectory() as folder:
+            dest = os.path.join(folder, 'x.ipa')
+            ipa_extract.extract_ipa(FakeSSH(self.tar()), '/var/containers/Bundle/Application/U/X.app', dest)
+            with zipfile.ZipFile(dest) as ipa:
+                self.assertEqual(ipa.read('Payload/X.app/X'), b'exe')
+                self.assertEqual(ipa.read('iTunesMetadata.plist'), b'meta')
+                self.assertEqual(ipa.read('Payload/X.app/Current'), b'X')  # symlink target
+                self.assertEqual(ipa.getinfo('Payload/X.app/X').external_attr >> 16 & 0o777, 0o755)
+            self.assertEqual(os.listdir(folder), ['x.ipa'])
+
+    def test_hard_links_are_not_dropped_silently(self):
+        import ipa_extract
+        import tarfile
+        link = tarfile.TarInfo('X.app/Copy')
+        link.type, link.linkname = tarfile.LNKTYPE, 'X.app/X'
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(RuntimeError):
+                ipa_extract.extract_ipa(FakeSSH(self.tar(link)), '/c/U/X.app', os.path.join(folder, 'x.ipa'))
+            self.assertEqual(os.listdir(folder), [])  # no partial IPA left behind
+
+
+if __name__ == '__main__':
+    unittest.main()

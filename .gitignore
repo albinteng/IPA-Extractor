@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+settings.json
+output_decrypted/
+output_encrypted/
+*.ipa
+*.part
+.DS_Store
