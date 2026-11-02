@@ -147,6 +147,89 @@ class FridaVersionTests(unittest.TestCase):
         self.assertEqual(output.strip(), 'False')
 
 
+def thin_macho(cpu, subtype, cryptid, is64=True):
+    """Minimal Mach-O with one LC_ENCRYPTION_INFO(_64) and some code after the load commands."""
+    if is64:
+        command = struct.pack('<IIIIII', 0x2C, 24, 0x4000, 0x1000, cryptid, 0)
+        header = struct.pack('<IiiIIIII', 0xFEEDFACF, cpu, subtype, 2, 1, len(command), 0, 0)
+    else:
+        command = struct.pack('<IIIII', 0x21, 20, 0x4000, 0x1000, cryptid)
+        header = struct.pack('<IiiIIII', 0xFEEDFACE, cpu, subtype, 2, 1, len(command), 0)
+    return header + command + b'\xAA' * 300
+
+
+def fat_macho(*slices):
+    """Fat binary; slices are placed at 0x4000-aligned offsets like real ones."""
+    table = struct.pack('>II', 0xCAFEBABE, len(slices))
+    body = b''
+    offset = 0x4000
+    entries = []
+    for cpu, subtype, data in slices:
+        entries.append(struct.pack('>iiIII', cpu, subtype, offset, len(data), 14))
+        body += data.ljust(0x4000, b'\0')
+        offset += 0x4000
+    return (table + b''.join(entries)).ljust(0x4000, b'\0') + body
+
+
+class VerifyTests(unittest.TestCase):
+    ARM64 = (app_info.CPU_TYPE_ARM64, 0)
+    ARMV7 = (app_info.CPU_TYPE_ARM, 9)
+
+    def ipa(self, files):
+        import zipfile
+        handle = tempfile.NamedTemporaryFile(suffix='.ipa', delete=False)
+        handle.close()
+        self.addCleanup(os.remove, handle.name)
+        with zipfile.ZipFile(handle.name, 'w', zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('Payload/X.app/Info.plist', b'<plist/>' * 10)
+            archive.writestr('Payload/X.app/icon.png', b'\x89PNG' + b'\0' * 100)
+            archive.writestr('Payload/X.app/Java.class', struct.pack('>II', 0xCAFEBABE, 0x34) + b'\0' * 40)
+            for name, data in files.items():
+                archive.writestr('Payload/X.app/' + name, data)
+        return handle.name
+
+    def verify(self, files):
+        import ipa_verify
+        return ipa_verify.verify_ipa(self.ipa(files))
+
+    def test_fully_decrypted(self):
+        import ipa_verify
+        result = self.verify({'X': thin_macho(*self.ARM64, 0),
+                              'Frameworks/F.framework/F': thin_macho(*self.ARM64, 0)})
+        self.assertEqual(result.status, ipa_verify.DECRYPTED)
+        self.assertEqual(len(result.files), 2)  # the PNG, plist and Java class file are not Mach-O
+
+    def test_encrypted_extension_is_partial(self):
+        import ipa_verify
+        result = self.verify({'X': thin_macho(*self.ARM64, 0),
+                              'PlugIns/E.appex/E': thin_macho(*self.ARM64, 1)})
+        self.assertEqual(result.status, ipa_verify.PARTIAL)
+        self.assertEqual([ipa_verify.describe(f) for f in result.encrypted], ['PlugIns/E.appex/E (arm64)'])
+
+    def test_every_fat_slice_is_checked(self):
+        import ipa_verify
+        only_32bit = fat_macho(self.ARMV7 + (thin_macho(*self.ARMV7, 1, is64=False),),
+                               self.ARM64 + (thin_macho(*self.ARM64, 0),))
+        self.assertEqual(self.verify({'X': only_32bit}).status, ipa_verify.PARTIAL_32BIT)
+        arm64_encrypted = fat_macho(self.ARMV7 + (thin_macho(*self.ARMV7, 0, is64=False),),
+                                    self.ARM64 + (thin_macho(*self.ARM64, 1),))
+        result = self.verify({'X': arm64_encrypted})
+        self.assertEqual(result.status, ipa_verify.PARTIAL)
+        self.assertEqual(result.encrypted[0].encrypted_archs, ['arm64'])
+
+    def test_32bit_only_binary_is_not_partial_64bit(self):
+        import ipa_verify
+        # Without a decrypted arm64 slice beside it, nothing in the file runs on 64-bit devices.
+        result = self.verify({'X': thin_macho(*self.ARMV7, 1, is64=False)})
+        self.assertEqual(result.status, ipa_verify.PARTIAL)
+
+    def test_truncated_macho_counts_as_not_verified(self):
+        import ipa_verify
+        result = self.verify({'X': thin_macho(*self.ARM64, 0)[:40]})
+        self.assertEqual(result.status, ipa_verify.PARTIAL)
+        self.assertTrue(result.files[0].error)
+
+
 class ErrorClassificationTests(unittest.TestCase):
     def test_known_errors(self):
         import ipa_extractor

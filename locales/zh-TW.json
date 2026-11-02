@@ -250,5 +250,8 @@
   "inst_delete": "刪除",
   "inst_reinstall": "這個版本已經安裝，再裝一次會覆蓋。",
   "inst_other_major": "提醒：主版本和裝置 frida-server {device} 不同，只會在連其他裝置時使用。",
-  "inst_will_run": "將在這台電腦執行以下指令（frida 裝在 {path} 底下各自的資料夾；npm install 需要 Node.js）："
+  "inst_will_run": "將在這台電腦執行以下指令（frida 裝在 {path} 底下各自的資料夾；npm install 需要 Node.js）：",
+  "log_verify_ok": "[{bundle}] 驗證：{n} 個 Mach-O 都已解密。",
+  "log_verify_partial": "[{bundle}] 驗證：{total} 個 Mach-O 中有 {n} 個仍加密（{status}）：",
+  "log_verify_failed": "[{bundle}] 無法驗證 IPA：{error}"
 }

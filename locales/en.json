@@ -246,5 +246,8 @@
   "inst_delete": "Delete",
   "inst_reinstall": "This version is already installed; installing it again replaces it.",
   "inst_other_major": "Note: its major version differs from device frida-server {device}, so it will only be used with other devices.",
-  "inst_will_run": "These commands will run on this computer (frida goes into its own folder under {path}; npm install needs Node.js):"
+  "inst_will_run": "These commands will run on this computer (frida goes into its own folder under {path}; npm install needs Node.js):",
+  "log_verify_ok": "[{bundle}] Verified: all {n} Mach-O files are decrypted.",
+  "log_verify_partial": "[{bundle}] Verified: {n} of {total} Mach-O files are still encrypted ({status}):",
+  "log_verify_failed": "[{bundle}] Could not verify the IPA: {error}"
 }

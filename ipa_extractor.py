@@ -32,6 +32,7 @@ import app_info
 import device_apps
 import frida_versions
 import ipa_extract
+import ipa_verify
 import i18n
 import remote
 
@@ -1625,8 +1626,9 @@ class DumpGUI(tk.Tk):
                 counts['succeeded'] += 1
                 consecutive_frida_errors = 0
                 self.post(self.set_status, bundle, Text('st_done'), 'done')
-                self.post(self.log, Text('log_done', bundle=bundle,
-                                         path=os.path.join(options['outdir'], name + '.ipa')))
+                path = os.path.join(options['outdir'], name + '.ipa')
+                self.post(self.log, Text('log_done', bundle=bundle, path=path))
+                self._verify_dump(bundle, path)
             elif self.cancel_requested.is_set():
                 self.post(self.set_status, bundle, Text('st_cancelled'), 'failed')
             else:
@@ -1638,6 +1640,28 @@ class DumpGUI(tk.Tk):
                 consecutive_frida_errors = consecutive_frida_errors + 1 if kind in RESTART_ERRORS else 0
                 if consecutive_frida_errors >= MAX_CONSECUTIVE_FRIDA_ERRORS:
                     paused = counts['paused'] = True
+
+    def _verify_dump(self, bundle, path):
+        """Check every Mach-O slice of a decrypted IPA (R1). Runs on the dump thread."""
+        try:
+            result = ipa_verify.verify_ipa(path)
+        except Exception as error:
+            self.post(self._set_verify, bundle, None)
+            self.post(self.log, Text('log_verify_failed', bundle=bundle, error=error))
+            return
+        self.post(self._set_verify, bundle, result.status)
+        if result.status == ipa_verify.DECRYPTED:
+            self.post(self.log, Text('log_verify_ok', bundle=bundle, n=len(result.files)))
+            return
+        self.post(self.log, Text('log_verify_partial', bundle=bundle, n=len(result.encrypted),
+                                 total=len(result.files), status=result.status))
+        for file_result in result.encrypted:
+            self.post(self.log, '    ' + ipa_verify.describe(file_result))
+
+    def _set_verify(self, bundle, status):
+        """Remember the verification result: ipa_verify's status, or None when it could not run."""
+        if bundle in self.apps:
+            self.apps[bundle]['verify'] = status
 
     def _restart_frida_server(self, options):
         """Kill frida-server (launchd's KeepAlive respawns it) and reconnect. Runs on the dump thread."""
