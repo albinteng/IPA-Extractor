@@ -11,7 +11,7 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi (
 
 - Works with rootful and rootless jailbreaks.
 - App list read over SSH with name, bundle ID, version, encryption state, 32/64-bit architecture, Team ID, signer and developer.
-- Filters (user apps, non-Apple apps, encrypted apps), search, and checkboxes with bulk actions, including *Check failed apps* and *Check unextracted apps*.
+- Filters (user apps, non-Apple apps, encrypted apps), search, and checkboxes with bulk actions, including *Check failed apps*, *Check partially decrypted apps* and *Check unextracted apps*.
 - Batch extraction with per-app status and an overall progress bar.
 - Large decrypted batches stay stable: each launched app is closed after dumping, a stuck `frida-server` is detected, restarted and the app retried, and the batch pauses after repeated Frida failures.
 - Configurable file names from `{name}`, `{bundle}`, `{version}`, `{build}` and `{type}`, with a preview and clash detection.
@@ -90,7 +90,7 @@ For decrypted IPAs, keep the device unlocked with the screen on. To set up decry
 
 Defaults: SSH port 22 with no account, Frida port 27042, output folders `output_decrypted` and `output_encrypted` next to the tool, frida-ios-dump in a `frida-ios-dump` folder beside the tool's folder, *Automatic* language and font, text size 10 (13 on macOS).
 
-`{type}` is `decrypted`, `encrypted` (original IPA), or `original` (original IPA whose executable was never encrypted).
+`{type}` is `encrypted` (original IPA) or `original` (original IPA whose executable was never encrypted). For decrypted IPAs it follows a check of every executable in the IPA (main app, frameworks, app extensions, Watch app), done on the computer after each extraction: `decrypted` (all decrypted), `partial-64bit-decrypted` (only 32-bit slices of fat binaries still encrypted; all 64-bit code is decrypted) or `partial-decrypted` (some 64-bit code is still encrypted; the log and the details pane list the files and why). *Check partially decrypted apps* selects these apps.
 
 Installed `frida` versions are kept in `frida_versions/` next to the tool (`~/.ipa_extractor/frida_versions` when the tool's folder is read-only); a `frida` installed in Python's own site-packages by version 1.0 is no longer used.
 

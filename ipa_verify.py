@@ -197,6 +197,26 @@ def short_name(name):
     return name
 
 
+def reason(file_result):
+    """Why a file is probably still encrypted, as a key: unreadable, slice32, watch, appex,
+    framework, main or other."""
+    if file_result.error:
+        return 'unreadable'
+    encrypted = [s for s in file_result.slices if s.encrypted]
+    if encrypted and not any(s.is_64bit for s in encrypted):
+        return 'slice32'  # 64-bit devices only ever run (and so decrypt) the arm64 slice
+    inner = short_name(file_result.name)
+    if inner.startswith('Watch/'):
+        return 'watch'
+    if '.appex/' in inner:
+        return 'appex'  # runs in its own process, which frida-ios-dump does not attach to
+    if '.framework/' in inner or inner.endswith('.dylib'):
+        return 'framework'  # the app had not loaded it when it was dumped
+    if '/' not in inner:
+        return 'main'
+    return 'other'
+
+
 def describe(file_result):
     if file_result.error:
         return '{} ({})'.format(short_name(file_result.name), file_result.error)

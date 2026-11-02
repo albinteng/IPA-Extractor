@@ -113,6 +113,8 @@ RETRY_ERRORS = RESTART_ERRORS + ('session', 'resume')
 MAX_CONSECUTIVE_FRIDA_ERRORS = 3
 # dump.py's own agent timeout is 120 s, so silence beyond this means the worker is hung.
 STALL_TIMEOUT = 150
+# {type} of a decrypted IPA follows its verification result.
+DUMP_KINDS = (ipa_verify.DECRYPTED, ipa_verify.PARTIAL_32BIT, ipa_verify.PARTIAL)
 
 
 def pip_install(packages):
@@ -320,6 +322,13 @@ class Text:
         self.params = params
 
 
+class Indented:
+    """A message shown indented under the one before it."""
+
+    def __init__(self, text):
+        self.text = text
+
+
 def wrap_text(text, width, font='TkDefaultFont'):
     """Insert line breaks so text fits width pixels.
 
@@ -518,6 +527,8 @@ class DumpGUI(tk.Tk):
         self.style.configure('Treeview', rowheight=tkfont.nametofont('TkDefaultFont').metrics('linespace') + 8)
 
     def render(self, text):
+        if isinstance(text, Indented):
+            return '    ' + self.render(text.text)
         if isinstance(text, Text):
             params = {k: self.render(v) for k, v in text.params.items()}
             return self.t(text.key, **params)
@@ -590,6 +601,9 @@ class DumpGUI(tk.Tk):
         ttk.Button(checks, text=self.t('check_none'), command=self.check_none).pack(side='left', padx=2)
         ttk.Button(checks, text=self.t('check_invert'), command=self.check_invert).pack(side='left', padx=2)
         ttk.Button(checks, text=self.t('check_failed'), command=self.check_failed).pack(side='left', padx=2)
+        partial = ttk.Button(checks, text=self.t('check_partial'), command=self.check_partial)
+        partial.pack(side='left', padx=2)
+        Tooltip(partial, self.t('check_partial_tip'))
         unextracted = ttk.Button(checks, text=self.t('check_unextracted'), command=self.check_unextracted)
         unextracted.pack(side='left', padx=2)
         Tooltip(unextracted, self.t('check_unextracted_tip'))
@@ -614,6 +628,7 @@ class DumpGUI(tk.Tk):
         self.tree.tag_configure('checked', background='#ddf4ff')
         self.tree.tag_configure('done', foreground=COLORS['ok'])
         self.tree.tag_configure('failed', foreground=COLORS['error'])
+        self.tree.tag_configure('partial', foreground='#bc4c00')
         self.tree.tag_configure('running', foreground='#0969da')
         self.tree.tag_configure('queued', foreground='#9a6700')
         self.tree.tag_configure('offloaded', foreground=COLORS['idle'])
@@ -839,10 +854,13 @@ class DumpGUI(tk.Tk):
         separate = mode == 'extract' and self.var_separate_dirs.get()
         return (self.var_extract_dir if separate else self.var_outdir).get().strip()
 
-    def ipa_name(self, app, mode):
-        """IPA base name for app; raises NameTemplateError for a bad template."""
+    def ipa_name(self, app, mode, kind=None):
+        """IPA base name for app; raises NameTemplateError for a bad template.
+
+        For decrypted IPAs kind is the verification result (ipa_verify's status), 'decrypted' by default.
+        """
         if mode == 'dump':
-            template, kind = self.var_name_decrypted.get(), 'decrypted'
+            template, kind = self.var_name_decrypted.get(), kind or ipa_verify.DECRYPTED
         else:
             # Unknown counts as encrypted, the usual case for App Store apps.
             encrypted = app.get('info', {}).get('encrypted') is not False
@@ -1171,8 +1189,10 @@ class DumpGUI(tk.Tk):
             return
         for bundle, app in apps.items():
             previous = self.apps.get(bundle)
-            if previous and previous.get('version') == app['version'] and 'info' in previous:
-                app['info'] = previous['info']
+            if previous and previous.get('version') == app['version']:
+                for key in ('info', 'verify'):
+                    if key in previous:
+                        app[key] = previous[key]
         self.apps = apps
         self.checked = {b for b in self.checked if b in apps and not apps[b].get('offloaded')}
         user_count = sum(1 for a in apps.values() if is_user_app(a['path']))
@@ -1347,6 +1367,32 @@ class DumpGUI(tk.Tk):
             self.set_checked(list(self.checked), False)
             self.set_checked(failed, True)
 
+    def check_partial(self):
+        """Check apps whose decrypted IPA still has encrypted files (verified this session, or found
+        in the output folder under a partial file name)."""
+        if self.dumping:
+            return
+        partial = []
+        for bundle in self.tree.get_children():
+            app = self.apps[bundle]
+            verify = app.get('verify')
+            if verify:
+                if verify['status'] != ipa_verify.DECRYPTED:
+                    partial.append(bundle)
+                continue
+            try:
+                names = {kind: self.ipa_name(app, 'dump', kind) for kind in DUMP_KINDS}
+            except app_info.NameTemplateError as error:
+                self._show_name_error('dump', error)
+                return
+            exists = {kind: os.path.exists(os.path.join(self.output_dir('dump'), name + '.ipa'))
+                      for kind, name in names.items()}
+            # Without {type} in the template every result has the same name and cannot be told apart.
+            if not exists[ipa_verify.DECRYPTED] and any(exists[k] for k in DUMP_KINDS[1:]):
+                partial.append(bundle)
+        self.set_checked(list(self.checked), False)
+        self.set_checked(partial, True)
+
     def check_unextracted(self):
         """Check shown apps with neither a decrypted nor an original IPA under the current file names."""
         if self.dumping:
@@ -1357,9 +1403,10 @@ class DumpGUI(tk.Tk):
             if app.get('offloaded'):
                 continue
             paths = []
-            for mode in ('dump', 'extract'):
+            for mode, kinds in (('dump', DUMP_KINDS), ('extract', (None,))):
                 try:
-                    paths.append(os.path.join(self.output_dir(mode), self.ipa_name(app, mode) + '.ipa'))
+                    paths += [os.path.join(self.output_dir(mode), self.ipa_name(app, mode, kind) + '.ipa')
+                              for kind in kinds]  # a partially decrypted IPA counts as extracted
                 except app_info.NameTemplateError as error:
                     self._show_name_error(mode, error)
                     return
@@ -1401,10 +1448,21 @@ class DumpGUI(tk.Tk):
                 self.t('d_data', path=app['data']),
             ]
             try:
-                lines.append(self.t('d_output', decrypted=self.ipa_name(app, 'dump') + '.ipa',
+                verified = (app.get('verify') or {}).get('status')  # the name the last extraction got
+                lines.append(self.t('d_output', decrypted=self.ipa_name(app, 'dump', verified) + '.ipa',
                                     original=self.ipa_name(app, 'extract') + '.ipa'))
             except app_info.NameTemplateError:
                 pass
+            verify = app.get('verify')
+            if verify:
+                if verify['status'] == ipa_verify.DECRYPTED:
+                    lines.append(self.t('d_verify_ok', n=verify['total']))
+                elif verify['status'] == ipa_verify.PARTIAL_32BIT:
+                    lines.append(self.t('d_verify_partial32', n=len(verify['files']), total=verify['total']))
+                else:
+                    lines.append(self.t('d_verify_partial', n=len(verify['files']), total=verify['total']))
+                lines += ['    ' + self.t('log_verify_file', file=f['file'], archs=f['archs'],
+                                           reason=self.render(self.reason_text(f))) for f in verify['files']]
             if app.get('offloaded'):
                 lines.append(self.t('d_offloaded'))
             if info.get('error'):
@@ -1469,15 +1527,20 @@ class DumpGUI(tk.Tk):
         self.install_dependencies()  # explains an unset folder, offers a download or the npm install
         return False
 
-    def _prepare_batch(self, mode, jobs):
-        """Check the output folder and overwrites, then mark jobs queued. Returns the folder or None."""
+    def _prepare_batch(self, mode, jobs, names=None):
+        """Check the output folder and overwrites, then mark jobs queued. Returns the folder or None.
+
+        names ({bundle: {kind: name}}) lists every name a decrypted IPA may end up with.
+        """
         outdir = self.output_dir(mode)
         try:
             os.makedirs(outdir, exist_ok=True)
         except OSError as error:
             messagebox.showerror(self.t('m_outdir_t'), str(error))
             return None
-        existing = [name + '.ipa' for _, name in jobs if os.path.exists(os.path.join(outdir, name + '.ipa'))]
+        candidates = [n for bundle, name in jobs
+                      for n in dict.fromkeys(names[bundle].values() if names else [name])]
+        existing = [n + '.ipa' for n in candidates if os.path.exists(os.path.join(outdir, n + '.ipa'))]
         if existing and not messagebox.askyesno(self.t('m_overwrite_t'), self.t(
                 'm_overwrite', files='\n'.join(existing[:15]) + ('\n…' if len(existing) > 15 else ''))):
             return None
@@ -1509,7 +1572,10 @@ class DumpGUI(tk.Tk):
         if self.frida_version is None or self.tunnel is None:
             self.connect_frida(then=self.start_dump)
             return
-        outdir = self._prepare_batch('dump', jobs)
+        # A decrypted IPA is named after its verification result, so any of these may be written.
+        names = {bundle: {kind: self.ipa_name(self.apps[bundle], 'dump', kind) for kind in DUMP_KINDS}
+                 for bundle, _ in jobs}
+        outdir = self._prepare_batch('dump', jobs, names)
         if outdir is None:
             return
         self.log(Text('log_start', n=len(jobs)))
@@ -1518,7 +1584,7 @@ class DumpGUI(tk.Tk):
                        frida='127.0.0.1:{}'.format(self.tunnel.local_port), frida_version=self.frida_version,
                        outdir=outdir,
                        dump_dir=dump_dir, close_after=self.var_close_after.get(),
-                       restart_frida=self.var_restart_frida.get(), generation=self.generation)
+                       restart_frida=self.var_restart_frida.get(), generation=self.generation, names=names)
         self.run_background(self._dump_worker, jobs, options)
 
     def start_extract(self):
@@ -1594,14 +1660,14 @@ class DumpGUI(tk.Tk):
         self.log(Text('log_cancel'))
 
     def _dump_worker(self, jobs, options):
-        counts = dict(succeeded=0, paused=False)
+        counts = dict(succeeded=0, partial=0, paused=False)
         try:
             self._dump_jobs(jobs, options, counts)
         except Exception as error:  # keep the UI usable whatever happens
             self.post(self.log, Text('log_batch_error', error=error))
         finally:
             self.post(self._batch_finished, 'dump', options['outdir'], counts['succeeded'], len(jobs),
-                      counts['paused'])
+                      counts['paused'], counts['partial'])
 
     def _dump_jobs(self, jobs, options, counts):
         total = len(jobs)
@@ -1623,12 +1689,10 @@ class DumpGUI(tk.Tk):
                     break
                 self.post(self.log, Text('log_retry', bundle=bundle))
             if ok:
-                counts['succeeded'] += 1
                 consecutive_frida_errors = 0
-                self.post(self.set_status, bundle, Text('st_done'), 'done')
-                path = os.path.join(options['outdir'], name + '.ipa')
-                self.post(self.log, Text('log_done', bundle=bundle, path=path))
-                self._verify_dump(bundle, path)
+                ok = self._finish_dump(bundle, os.path.join(options['outdir'], name + '.ipa'), options, counts)
+                if ok:
+                    counts['succeeded'] += 1
             elif self.cancel_requested.is_set():
                 self.post(self.set_status, bundle, Text('st_cancelled'), 'failed')
             else:
@@ -1641,27 +1705,68 @@ class DumpGUI(tk.Tk):
                 if consecutive_frida_errors >= MAX_CONSECUTIVE_FRIDA_ERRORS:
                     paused = counts['paused'] = True
 
-    def _verify_dump(self, bundle, path):
-        """Check every Mach-O slice of a decrypted IPA (R1). Runs on the dump thread."""
+    def _finish_dump(self, bundle, path, options, counts):
+        """Verify a freshly decrypted IPA (R1), name it after the result and report it (R3).
+
+        Runs on the dump thread; False when the IPA turned out to be unusable.
+        """
         try:
             result = ipa_verify.verify_ipa(path)
-        except Exception as error:
-            self.post(self._set_verify, bundle, None)
+            status = result.status
+        except Exception as error:  # not a readable zip: dump.py wrote a broken IPA
+            self.post(self.set_status, bundle, Text('st_failed', msg=Text('verify_error', error=error)), 'failed')
             self.post(self.log, Text('log_verify_failed', bundle=bundle, error=error))
-            return
-        self.post(self._set_verify, bundle, result.status)
-        if result.status == ipa_verify.DECRYPTED:
+            return False
+        if status == ipa_verify.NO_MACHO:
+            self.post(self.set_status, bundle, Text('st_failed', msg=Text('verify_no_macho')), 'failed')
+            self.post(self.log, Text('log_failed', bundle=bundle, msg=Text('verify_no_macho')))
+            return False
+        final = os.path.join(options['outdir'], options['names'][bundle][status] + '.ipa')
+        if final != path:
+            try:
+                os.replace(path, final)
+                path = final
+            except OSError as error:
+                self.post(self.log, Text('log_rename_failed', path=final, error=error))
+        # The user agreed to replace these; an older result under another name would be stale.
+        for other in options['names'][bundle].values():
+            stale = os.path.join(options['outdir'], other + '.ipa')
+            if stale != path and os.path.exists(stale):
+                try:
+                    os.remove(stale)
+                    self.post(self.log, Text('log_removed_stale', bundle=bundle, path=stale))
+                except OSError as error:
+                    self.post(self.log, Text('log_remove_failed', path=stale, error=error))
+        files = [dict(file=ipa_verify.short_name(f.name), archs=', '.join(f.encrypted_archs) or '?',
+                      reason=ipa_verify.reason(f), error=f.error or '') for f in result.encrypted]
+        self.post(self._set_verify, bundle, status, len(result.files), files)
+        self.post(self.log, Text('log_done', bundle=bundle, path=path))
+        if status == ipa_verify.DECRYPTED:
+            self.post(self.set_status, bundle, Text('st_done'), 'done')
             self.post(self.log, Text('log_verify_ok', bundle=bundle, n=len(result.files)))
-            return
-        self.post(self.log, Text('log_verify_partial', bundle=bundle, n=len(result.encrypted),
-                                 total=len(result.files), status=result.status))
-        for file_result in result.encrypted:
-            self.post(self.log, '    ' + ipa_verify.describe(file_result))
+            return True
+        counts['partial'] += 1
+        if status == ipa_verify.PARTIAL_32BIT:
+            self.post(self.set_status, bundle, Text('st_done_partial32'), 'done')
+        else:
+            self.post(self.set_status, bundle, Text('st_partial', n=len(files)), 'partial')
+        self.post(self.log, Text('log_verify_partial', bundle=bundle, n=len(files),
+                                 total=len(result.files), status=status))
+        for file in files:
+            self.post(self.log, Indented(Text('log_verify_file', file=file['file'], archs=file['archs'],
+                                              reason=self.reason_text(file))))
+        return True
 
-    def _set_verify(self, bundle, status):
-        """Remember the verification result: ipa_verify's status, or None when it could not run."""
+    @staticmethod
+    def reason_text(file):
+        return Text('reason_' + file['reason'], error=file['error'])
+
+    def _set_verify(self, bundle, status, total, files):
+        """Remember the verification result for the details pane and "Check partially decrypted apps"."""
         if bundle in self.apps:
-            self.apps[bundle]['verify'] = status
+            self.apps[bundle]['verify'] = dict(status=status, total=total, files=files)
+            if bundle in self.tree.selection():
+                self.show_details()
 
     def _restart_frida_server(self, options):
         """Kill frida-server (launchd's KeepAlive respawns it) and reconnect. Runs on the dump thread."""
@@ -1816,7 +1921,7 @@ class DumpGUI(tk.Tk):
             text = text[0] + self.render(text[1])
         self.lbl_progress.configure(text=self.render(text or '')[:PROGRESS_LABEL_CHARS])
 
-    def _batch_finished(self, mode, outdir, succeeded, total, paused):
+    def _batch_finished(self, mode, outdir, succeeded, total, paused, partial=0):
         self.dumping = False
         self.btn_cancel.configure(state='disabled')
         if self.cancel_requested.is_set():
@@ -1831,6 +1936,8 @@ class DumpGUI(tk.Tk):
         self._checks_changed()
         self.log(Text('log_extract_finished' if mode == 'extract' else 'log_finished',
                       ok=succeeded, total=total, dir=outdir))
+        if partial:
+            self.log(Text('log_partial_summary', n=partial))
         if paused:
             messagebox.showwarning(self.t('m_paused_t'), self.t('m_paused', n=MAX_CONSECUTIVE_FRIDA_ERRORS))
 

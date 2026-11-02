@@ -223,6 +223,25 @@ class VerifyTests(unittest.TestCase):
         result = self.verify({'X': thin_macho(*self.ARMV7, 1, is64=False)})
         self.assertEqual(result.status, ipa_verify.PARTIAL)
 
+    def test_reasons(self):
+        import ipa_verify
+        fat_32 = fat_macho(self.ARMV7 + (thin_macho(*self.ARMV7, 1, is64=False),),
+                           self.ARM64 + (thin_macho(*self.ARM64, 0),))
+        result = self.verify({'X': thin_macho(*self.ARM64, 1),
+                              'PlugIns/E.appex/E': thin_macho(*self.ARM64, 1),
+                              'Watch/W.app/PlugIns/WE.appex/WE': thin_macho(*self.ARM64, 1),
+                              'Frameworks/F.framework/F': thin_macho(*self.ARM64, 1),
+                              'Frameworks/libz.dylib': thin_macho(*self.ARM64, 1),
+                              'Frameworks/G.framework/G': fat_32,
+                              'Data/plugin.bin': thin_macho(*self.ARM64, 1),
+                              'Broken': thin_macho(*self.ARM64, 0)[:40]})
+        reasons = {ipa_verify.short_name(f.name): ipa_verify.reason(f) for f in result.encrypted}
+        self.assertEqual(reasons, {'X': 'main', 'PlugIns/E.appex/E': 'appex',
+                                   'Watch/W.app/PlugIns/WE.appex/WE': 'watch',
+                                   'Frameworks/F.framework/F': 'framework', 'Frameworks/libz.dylib': 'framework',
+                                   'Frameworks/G.framework/G': 'slice32', 'Data/plugin.bin': 'other',
+                                   'Broken': 'unreadable'})
+
     def test_truncated_macho_counts_as_not_verified(self):
         import ipa_verify
         result = self.verify({'X': thin_macho(*self.ARM64, 0)[:40]})
