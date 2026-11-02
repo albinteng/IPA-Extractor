@@ -122,6 +122,12 @@ def _running(client):
     return result
 
 
+def running_pid(client, app_path):
+    """PID of the app whose bundle is at app_path, or 0 when it is not running."""
+    prefix = app_path.rstrip('/') + '/'
+    return next((pid for pid, command in _running(client) if command.startswith(prefix)), 0)
+
+
 class _SFTPPool:
     """A fixed set of worker threads, each with its own SFTP channel."""
 

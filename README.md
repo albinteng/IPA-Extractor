@@ -18,6 +18,7 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi (
 - Separate or shared output folders for decrypted and original IPAs.
 - Frida is connected through the same SSH session (no `ssh -L` or `iproxy` needed).
 - Built-in setup: downloads frida-ios-dump and installs the `frida` version that matches the device (or any other release you pick).
+- Several `frida` versions side by side: each device gets the one matching its frida-server, so devices with different Frida major versions can be used one after another in the same window, without reinstalling or restarting.
 
 ## Requirements
 
@@ -44,7 +45,7 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi (
 
 Check the connection from a terminal with `ssh root@<device IP>` (rootful) or `ssh mobile@<device IP>` (rootless) before using the tool.
 
-The `frida` package on the computer must match the major version of frida-server on the device (e.g. 16.x with 16.x). *Settings → Frida → Install Frida dependencies* shows the device version and installs the matching one.
+The `frida` used on the computer must match the major version of frida-server on the device (e.g. 16.x with 16.x). The tool keeps each installed `frida` version in its own folder (`frida_versions/` next to the tool) and, on connecting, picks the device's exact version or else the newest one with the same major version. When none fits, it offers to install the device's version. *Settings → Frida → Install Frida dependencies* lists the installed versions, adds others and deletes them.
 
 ## Getting started
 
@@ -77,7 +78,7 @@ brew install python python-tk   # or use the python.org installer, which include
 2. Check the apps you want (click ☐, double-click a row, or select rows and press Space).
 3. Click **Extract original IPA** or **Extract decrypted IPA**.
 
-For decrypted IPAs, keep the device unlocked with the screen on. To set up decrypted extraction, open **Settings → Frida**: *Install frida-ios-dump* downloads the latest version from GitHub to a folder you choose, and *Install Frida dependencies* lets you pick the `frida` version (the device's frida-server version is recommended), then runs `pip install` and `npm install`.
+For decrypted IPAs, keep the device unlocked with the screen on. To set up decrypted extraction, open **Settings → Frida**: *Install frida-ios-dump* downloads the latest version from GitHub to a folder you choose, and *Install Frida dependencies* lets you add a `frida` version (the device's frida-server version is recommended), then runs `pip install --target` into that version's folder and `npm install`. No restart is needed.
 
 ## Settings
 
@@ -90,6 +91,8 @@ For decrypted IPAs, keep the device unlocked with the screen on. To set up decry
 Defaults: SSH port 22 with no account, Frida port 27042, output folders `output_decrypted` and `output_encrypted` next to the tool, frida-ios-dump in a `frida-ios-dump` folder beside the tool's folder, *Automatic* language and font, text size 10 (13 on macOS).
 
 `{type}` is `decrypted`, `encrypted` (original IPA), or `original` (original IPA whose executable was never encrypted).
+
+Installed `frida` versions are kept in `frida_versions/` next to the tool (`~/.ipa_extractor/frida_versions` when the tool's folder is read-only); a `frida` installed in Python's own site-packages by version 1.0 is no longer used.
 
 Settings are stored in `settings.json` next to the tool, so they move with its folder; only values that differ from the defaults are written. If the tool's folder is read-only, `~/.ipa_extractor.json` (`%USERPROFILE%\.ipa_extractor.json` on Windows) is used instead. Delete the file to restore the defaults. *Remember password* stores the SSH password there in plain text.
 

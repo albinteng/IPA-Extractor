@@ -5,7 +5,7 @@
 __version__ = '1.0'
 APP_NAME = 'IPA Extractor'
 
-import importlib.metadata
+import importlib.util
 import json
 import os
 import platform
@@ -30,12 +30,15 @@ except ImportError:  # main() offers to install it; pythonw would otherwise exit
 
 import app_info
 import device_apps
+import frida_versions
 import ipa_extract
 import i18n
 import remote
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 WORKER = os.path.join(script_dir, 'dump_worker.py')
+PROBE = os.path.join(script_dir, 'frida_probe.py')
+PROBE_TIMEOUT = 30
 ASSETS = os.path.join(script_dir, 'assets')
 DEFAULT_DUMP_DIR = os.path.join(os.path.dirname(script_dir), 'frida-ios-dump')
 IS_WINDOWS = sys.platform == 'win32'
@@ -182,14 +185,29 @@ class SSHTunnel:
                 pass
 
 
-def close_frida_tunnel(tunnel):
-    """Unregister the remote Frida device reached through tunnel, then close the tunnel."""
+def probe_frida(version, address, wait=0):
+    """Ask frida_probe.py, running with frida `version`, whether frida-server at address answers.
+
+    Returns (ok, detail): detail is the device OS on success, the error otherwise.
+    """
+    command = [sys.executable, '-u', PROBE, address] + (['--wait', str(wait)] if wait else [])
     try:
-        import frida
-        frida.get_device_manager().remove_remote_device('127.0.0.1:{}'.format(tunnel.local_port))
-    except Exception:
-        pass
-    tunnel.close()
+        process = subprocess.run(command, env=frida_versions.env(version), stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                 timeout=PROBE_TIMEOUT + wait, creationflags=NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        return False, 'frida.TransportError: timeout was reached'
+    except OSError as error:
+        return False, str(error)
+    lines = [line for line in process.stdout.splitlines() if line.startswith('{')]
+    try:
+        result = json.loads(lines[-1])
+    except (IndexError, ValueError):
+        return False, (process.stdout + process.stderr).strip()[-500:] or 'exit code {}'.format(process.returncode)
+    if result.get('frida') and result['frida'] != version:
+        # The version folder is broken and another frida on sys.path was imported instead.
+        return False, 'loaded frida {} instead of {}'.format(result['frida'], version)
+    return bool(result.get('ok')), result.get('os') if result.get('ok') else result.get('error', '')
 
 
 def dump_dir_status(path):
@@ -242,21 +260,7 @@ def frida_server_status(client):
     return version, running
 
 
-def loaded_frida_version():
-    """Version of the frida module this process has imported, or None."""
-    module = sys.modules.get('frida')
-    return getattr(module, '__version__', None) if module else None
-
-
-def host_frida_version():
-    try:
-        return importlib.metadata.version('frida')
-    except importlib.metadata.PackageNotFoundError:
-        return None
-
-
-def major(version):
-    return (version or '').split('.')[0]
+major = frida_versions.major
 
 
 def is_user_app(path):
@@ -385,7 +389,7 @@ class DumpGUI(tk.Tk):
         self.events = queue.Queue()
         self.ssh = None
         self.tunnel = None
-        self.frida_device = None
+        self.frida_version = None  # local frida version in use once Frida is connected
         self.device_frida_version = None
         self.apps = {}           # bundle -> dict(name, bundle, version, build, path, pid, info...)
         self.status = {}         # bundle -> (Text, tag)
@@ -441,6 +445,7 @@ class DumpGUI(tk.Tk):
         self.install_window = None
         self.ssh_connecting = False
         self.frida_connecting = False
+        self.installing = False   # a frida version is being installed
         self._build_ui()
         self.protocol('WM_DELETE_WINDOW', self.on_close)
         self.after(100, self._drain_events)
@@ -790,7 +795,7 @@ class DumpGUI(tk.Tk):
             window.destroy()
             self.show_details()
             # A folder fixed in Settings takes effect without reconnecting.
-            if (self.ssh is not None and self.frida_device is None and not self.frida_connecting
+            if (self.ssh is not None and self.frida_version is None and not self.frida_connecting
                     and dump_dir_status(self.var_dump_dir.get().strip()) == 'ok'):
                 self.connect_frida()
 
@@ -1029,32 +1034,30 @@ class DumpGUI(tk.Tk):
         except Exception as error:
             return fail('state_failed', error)
         self.post(self._device_frida_found, generation, device_version)
-        local_version = host_frida_version()
-        self.post(self.log, Text('log_versions', device=device_version or Text('not_installed'),
+        versions = frida_versions.installed()
+        self.post(self.log, Text('log_frida_versions', device=device_version or Text('not_installed'),
                                  state=Text('running' if running else 'not_running'),
-                                 local=local_version or Text('not_installed')))
-        loaded = loaded_frida_version()
-        if loaded and local_version and loaded != local_version:
-            # A different frida was installed while this window was open; the old one stays loaded.
-            return fail('state_restart', Text('log_restart_needed', loaded=loaded, installed=local_version))
+                                 local=', '.join(versions) or Text('not_installed')))
         if not device_version or not running:
             return fail('state_no_server', Text('log_no_server'))
-        if not local_version or major(local_version) != major(device_version):
-            return fail('state_mismatch', Text('log_mismatch', device=device_version))
-        if local_version != device_version:
-            self.post(self.log, Text('log_minor', local=local_version, device=device_version))
+        version = frida_versions.pick(device_version, versions)
+        if version is None:
+            self.post(self._frida_missing, generation, device_version, then)
+            return
+        if version != device_version:
+            self.post(self.log, Text('log_minor', local=version, device=device_version))
         tunnel = None
         try:
-            import frida
             tunnel = SSHTunnel(client.get_transport(), frida_port)
-            device = frida.get_device_manager().add_remote_device('127.0.0.1:{}'.format(tunnel.local_port))
             # Fail fast here rather than in the middle of a batch.
-            device.query_system_parameters()
+            ok, detail = probe_frida(version, '127.0.0.1:{}'.format(tunnel.local_port))
         except Exception as error:
+            ok, detail = False, error
+        if not ok:
             if tunnel is not None:
-                close_frida_tunnel(tunnel)
-            return fail('state_failed', Text('log_frida_failed', error=error))
-        self.post(self._frida_connected, generation, tunnel, device, then)
+                tunnel.close()
+            return fail('state_failed', Text('log_frida_failed', error=detail))
+        self.post(self._frida_connected, generation, tunnel, version, then)
 
     def _device_frida_found(self, generation, version):
         if generation == self.generation:
@@ -1070,26 +1073,49 @@ class DumpGUI(tk.Tk):
         if then is not None:
             messagebox.showerror(self.t('m_frida_t'), self.t('m_frida', error=self.render(error)))
 
-    def _frida_connected(self, generation, tunnel, device, then):
+    def _frida_missing(self, generation, device_version, then):
+        """No installed frida fits the device: offer to install the device's own version."""
+        self.frida_connecting = False
+        self._checks_changed()
+        if generation != self.generation:
+            return
+        self.set_frida_state(Text('state_no_local', major=major(device_version)), 'error')
+        self.log(Text('log_frida_missing', device=device_version, major=major(device_version)))
+        if self.dumping or not messagebox.askyesno(self.t('m_frida_get_t'), self.t(
+                'm_frida_get', device=device_version, major=major(device_version),
+                command=' '.join(frida_versions.install_command(device_version)))):
+            return
+        self.set_frida_state(Text('state_installing', version=device_version), 'busy')
+        self.installing = True
+        self._checks_changed()
+        self.run_background(self._install_worker, device_version, None, then)
+
+    def _frida_connected(self, generation, tunnel, version, then):
         self.frida_connecting = False
         self._checks_changed()
         if generation != self.generation or self.ssh is None:
-            close_frida_tunnel(tunnel)
+            tunnel.close()
             return
         self.tunnel = tunnel
-        self.frida_device = device
-        self.set_frida_state(Text('state_tunnel', port=tunnel.local_port), 'ok')
+        self.frida_version = version
+        self.set_frida_state(Text('state_tunnel_version', port=tunnel.local_port, version=version), 'ok')
         self.log(Text('log_frida_ok', local=tunnel.local_port, remote=self.var_frida_port.get()))
+        self.log(Text('log_frida_using', version=version))
         if then is not None:
             then()
 
+    def _drop_frida(self):
+        """Forget the Frida connection (SSH stays up), e.g. before switching frida versions."""
+        if self.tunnel is not None:
+            self.tunnel.close()
+        self.tunnel = self.frida_version = None
+
     def disconnect(self, reason):
         self.generation += 1
-        if self.tunnel is not None:
-            close_frida_tunnel(self.tunnel)
+        self._drop_frida()
         if self.ssh is not None:
             self.ssh.close()
-        self.ssh = self.tunnel = self.frida_device = self.device_frida_version = None
+        self.ssh = self.device_frida_version = None
         self.set_ssh_state(Text(reason), 'idle' if reason == 'state_disconnected' else 'error')
         self.set_frida_state(Text('state_unused'), 'idle')
         self.btn_connect.configure(state='normal', text=self.t('connect'))
@@ -1251,7 +1277,7 @@ class DumpGUI(tk.Tk):
         self.tree.heading('check', text=CHECKED if all_checked else UNCHECKED)
         state = 'disabled' if self.dumping or not self.checked else 'normal'
         self.btn_dump.configure(text=self.t('dump', n=len(self.checked)),
-                                state='disabled' if self.frida_connecting else state)
+                                state='disabled' if self.frida_connecting or self.installing else state)
         self.btn_extract.configure(text=self.t('extract', n=len(self.checked)), state=state)
 
     def on_tree_click(self, event):
@@ -1479,7 +1505,7 @@ class DumpGUI(tk.Tk):
         jobs = self._jobs('dump', bundles)
         if jobs is None:
             return
-        if self.frida_device is None or self.tunnel is None:
+        if self.frida_version is None or self.tunnel is None:
             self.connect_frida(then=self.start_dump)
             return
         outdir = self._prepare_batch('dump', jobs)
@@ -1488,7 +1514,8 @@ class DumpGUI(tk.Tk):
         self.log(Text('log_start', n=len(jobs)))
         options = dict(host=self.var_host.get().strip(), port=self.var_port.get().strip(),
                        user=self.var_user.get().strip(), password=self.var_password.get(),
-                       frida='127.0.0.1:{}'.format(self.tunnel.local_port), outdir=outdir,
+                       frida='127.0.0.1:{}'.format(self.tunnel.local_port), frida_version=self.frida_version,
+                       outdir=outdir,
                        dump_dir=dump_dir, close_after=self.var_close_after.get(),
                        restart_frida=self.var_restart_frida.get(), generation=self.generation)
         self.run_background(self._dump_worker, jobs, options)
@@ -1618,8 +1645,6 @@ class DumpGUI(tk.Tk):
         if client is None or tunnel is None:
             return False
         self.post(self.log, Text('log_restarting'))
-        import frida
-        manager = frida.get_device_manager()
         address = '127.0.0.1:{}'.format(tunnel.local_port)
         try:
             if options['user'] == 'root':
@@ -1634,21 +1659,13 @@ class DumpGUI(tk.Tk):
         error = None
         time.sleep(RESTART_GRACE)
         while time.monotonic() < deadline and not self.cancel_requested.is_set():
-            try:
-                try:
-                    manager.remove_remote_device(address)
-                except Exception:
-                    pass
-                device = manager.add_remote_device(address)
-                device.enumerate_processes()
-                if options['generation'] != self.generation:
-                    return False  # disconnected meanwhile; the tunnel is gone
-                self.frida_device = device
+            ok, error = probe_frida(options['frida_version'], address)
+            if options['generation'] != self.generation:
+                return False  # disconnected meanwhile; the tunnel is gone
+            if ok:
                 self.post(self.log, Text('log_restarted'))
                 return True
-            except Exception as exc:
-                error = exc
-                time.sleep(RESTART_POLL)
+            time.sleep(RESTART_POLL)
         self.post(self.log, Text('log_restart_failed', error=error))
         return False
 
@@ -1665,8 +1682,8 @@ class DumpGUI(tk.Tk):
         command = [sys.executable, '-u', WORKER, bundle, '-R', options['frida'],
                    '--ssh-transport', 'tcp', '-H', options['host'], '-p', options['port'],
                    '-u', options['user'], '-o', name, '-v']
-        env = dict(os.environ, FRIDA_DUMP_SSH_PASSWORD=options['password'], PYTHONIOENCODING='utf-8',
-                   FRIDA_IOS_DUMP_DIR=options['dump_dir'])
+        env = dict(frida_versions.env(options['frida_version']), FRIDA_DUMP_SSH_PASSWORD=options['password'],
+                   PYTHONIOENCODING='utf-8', FRIDA_IOS_DUMP_DIR=options['dump_dir'])
         try:
             process = subprocess.Popen(command, cwd=options['outdir'], env=env, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1747,35 +1764,26 @@ class DumpGUI(tk.Tk):
 
     def _close_running_app(self, bundle):
         """Close the app if it is running, so dump.py spawns it instead of attaching to it."""
+        # Checked over SSH, which works even when frida-server is wedged.
         try:
-            apps = self.frida_device.enumerate_applications(identifiers=[bundle])
+            pid = device_apps.running_pid(self.ssh, self.apps[bundle]['path'])
         except Exception:
-            return  # dump.py reports Frida problems itself
-        pid = next((app.pid for app in apps if app.identifier == bundle and app.pid), 0)
+            return  # dump.py reports connection problems itself
         if pid:
             self.post(self.log, Text('log_relaunch', bundle=bundle, pid=pid))
             self._close_app(bundle, pid)
             time.sleep(1)
 
     def _close_app(self, bundle, pid):
-        device = self.frida_device
-        frida_error = 'Frida disconnected'
-        if device is not None:
-            try:
-                device.kill(pid)
-                self.post(self.log, Text('log_closed', bundle=bundle, pid=pid))
-                return
-            except Exception as error:
-                # The process may already have exited or crashed.
-                if 'not found' in str(error).lower():
-                    return
-                frida_error = error
-        # A wedged frida-server cannot kill either; fall back to SSH.
+        # Apps run as mobile, so both root and mobile logins may kill them.
         try:
-            remote.run(self.ssh, 'kill -9 {}'.format(pid))
+            status, output = remote.run(self.ssh, 'kill -9 {}'.format(pid))
+        except Exception as error:
+            status, output = None, str(error)
+        if status == 0:
             self.post(self.log, Text('log_closed', bundle=bundle, pid=pid))
-        except Exception:
-            self.post(self.log, Text('log_close_failed', bundle=bundle, pid=pid, error=frida_error))
+        elif 'no such process' not in output.lower():  # it may already have exited or crashed
+            self.post(self.log, Text('log_close_failed', bundle=bundle, pid=pid, error=output.strip()))
 
     def _set_overall(self, value, text):
         self.overall = (value, text)
@@ -1877,6 +1885,11 @@ class DumpGUI(tk.Tk):
         custom = tk.StringVar()
         versions = ttk.Label(frame)
         versions.pack(anchor='w', pady=(0, 8))
+        # Installed versions, each with a delete button.
+        ttk.Label(frame, text=self.t('inst_installed')).pack(anchor='w')
+        installed_frame = ttk.Frame(frame)
+        installed_frame.pack(fill='x', padx=(16, 0), pady=(2, 10))
+        ttk.Label(frame, text=self.t('inst_add')).pack(anchor='w', pady=(0, 2))
         device_option = ttk.Radiobutton(frame, variable=choice, value='device')
         device_option.pack(anchor='w')
         latest_option = ttk.Radiobutton(frame, variable=choice, value='latest',
@@ -1889,9 +1902,10 @@ class DumpGUI(tk.Tk):
         custom_box.pack(side='left', padx=4)
         custom_box.bind('<<ComboboxSelected>>', lambda e: choice.set('custom'))
         custom_box.bind('<KeyRelease>', lambda e: choice.set('custom'))
-        warning = WrapLabel(frame, foreground=COLORS['error'], justify='left')
+        warning = WrapLabel(frame, foreground='#57606a', justify='left')
         warning.pack(fill='x', pady=(6, 0))
-        WrapLabel(frame, text=self.t('inst_commands'), justify='left').pack(fill='x', pady=(10, 2))
+        WrapLabel(frame, text=self.t('inst_will_run', path=frida_versions.ROOT), justify='left').pack(
+            fill='x', pady=(10, 2))
         commands_text = tk.Text(frame, height=5, width=80, wrap='char', font='TkTextFont',
                                 background=self.theme_background, relief='solid', borderwidth=1)
         commands_text.pack(fill='x')
@@ -1905,28 +1919,68 @@ class DumpGUI(tk.Tk):
             version = {'device': device[0], 'latest': latest[0], 'custom': custom.get().strip()}[choice.get()]
             return version if version and re.fullmatch(r'\d+\.\d+\.\d+', version) else None
 
+        def delete(version):
+            if self.dumping or self.installing:
+                return
+            if not messagebox.askyesno(self.t('m_frida_delete_t'), self.t('m_frida_delete', version=version),
+                                       parent=window):
+                return
+            in_use = version == self.frida_version
+            if in_use:
+                self._drop_frida()
+                self.set_frida_state(Text('state_unused'), 'idle')
+            try:
+                frida_versions.remove(version)
+                self.log(Text('log_frida_deleted', version=version))
+            except OSError as error:
+                messagebox.showerror(self.t('m_frida_delete_t'), str(error), parent=window)
+            refresh()
+            if in_use and self.ssh is not None:
+                self.connect_frida()  # picks another installed version, or offers a download
+
+        def refresh_installed():
+            for child in installed_frame.winfo_children():
+                child.destroy()
+            installed = frida_versions.installed()
+            if not installed:
+                ttk.Label(installed_frame, text=self.t('not_installed'), foreground='#57606a').pack(anchor='w')
+            for version in installed:
+                row = ttk.Frame(installed_frame)
+                row.pack(fill='x', pady=1)
+                text = version
+                if version == self.frida_version:
+                    text = self.t('inst_in_use', version=version)
+                elif device[0] and version == frida_versions.pick(device[0], installed):
+                    text = self.t('inst_for_device', version=version)
+                ttk.Label(row, text=text, width=28).pack(side='left')
+                ttk.Button(row, text=self.t('inst_delete'), command=lambda v=version: delete(v)).pack(side='left')
+
         def refresh(*args):
             if not window.winfo_exists():
                 return
             state = device_state[0]
             shown = {'found': device[0], 'missing': self.t('not_installed'), 'no_ssh': self.t('inst_no_ssh'),
                      'checking': self.t('inst_checking')}[state]
-            versions.configure(text=self.t('inst_versions', device=shown,
-                                           local=host_frida_version() or self.t('not_installed')))
+            versions.configure(text=self.t('inst_device_version', device=shown))
+            refresh_installed()
             device_option.configure(
                 text={'found': self.t('inst_device', version=device[0]),
                       'missing': self.t('inst_device_missing'), 'no_ssh': self.t('inst_device_no_ssh'),
                       'checking': self.t('inst_device_checking')}[state],
                 state='normal' if device[0] else 'disabled')
             version = selected()
-            warning.set_text(self.t('inst_major', device=device[0])
-                             if version and device[0] and major(version) != major(device[0]) else '')
+            if version and version in frida_versions.installed():
+                warning.set_text(self.t('inst_reinstall', version=version))
+            elif version and device[0] and major(version) != major(device[0]):
+                warning.set_text(self.t('inst_other_major', device=device[0]))
+            else:
+                warning.set_text('')
             commands = self._install_commands(version or '?', dump_dir)
             commands_text.configure(state='normal')
             commands_text.delete('1.0', 'end')
             commands_text.insert('end', '\n'.join('{}   ({})'.format(' '.join(c), cwd) for c, cwd in commands))
             commands_text.configure(state='disabled')
-            run_button.configure(state='normal' if version else 'disabled')
+            run_button.configure(state='normal' if version and not self.installing else 'disabled')
 
         def loaded(found_device, releases, error):
             if not window.winfo_exists():
@@ -1962,12 +2016,12 @@ class DumpGUI(tk.Tk):
 
         def run():
             version = selected()
-            if not version:
+            if not version or self.dumping or self.installing:
                 return
             window.destroy()
-            if 'frida' in sys.modules:
-                self.log(Text('log_frida_loaded'))
-            self.run_background(self._install_worker, self._install_commands(version, dump_dir))
+            self.installing = True
+            self._checks_changed()
+            self.run_background(self._install_worker, version, dump_dir, None)
 
         run_button.configure(command=run)
         choice.trace_add('write', refresh)
@@ -1977,43 +2031,69 @@ class DumpGUI(tk.Tk):
 
     @staticmethod
     def _install_commands(version, dump_dir):
-        # dump.py also needs scp; tqdm is not needed because dump_worker.py replaces it.
-        # frida-objc-bridge is installed into the frida-ios-dump checkout that dump.py bundles from.
-        return [
-            (pip_install(['frida=={}'.format(version), 'scp>=0.15']), script_dir),
-            (['npm', 'install'], dump_dir),
-        ]
+        """[(command, cwd)] that install frida `version` into its own folder, plus what dump.py needs.
 
-    def _install_worker(self, commands):
-        for command, cwd in commands:
-            self.post(self.log, '$ ' + ' '.join(command))
-            try:
-                process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE,
-                                           stderr=subprocess.STDOUT, text=True, encoding='utf-8',
-                                           errors='replace', shell=IS_WINDOWS and command[0] == 'npm',
-                                           creationflags=NO_WINDOW)
-            except OSError as error:
-                self.post(self.log, Text('log_exec_failed', error=error))
-                if command[0] == 'npm':
-                    self.post(self.log, Text('log_need_node'))
-                return
-            for line in process.stdout:
-                if line.strip():
-                    self.post(self.log, '  ' + line.rstrip())
-            code = process.wait()
-            if code != 0:
-                self.post(self.log, Text('log_cmd_failed', code=code))
-                return
-        self.post(self.log, Text('log_install_done'))
-        self.post(self._offer_restart)
+        dump_dir None skips npm install (frida-objc-bridge is already in place).
+        """
+        commands = [(frida_versions.install_command(version), script_dir)]
+        # dump.py also needs scp (from the tool's own Python); tqdm is replaced by dump_worker.py.
+        if importlib.util.find_spec('scp') is None:
+            commands.append((pip_install(['scp>=0.15']), script_dir))
+        if dump_dir:
+            # frida-objc-bridge is installed into the frida-ios-dump checkout that dump.py bundles from.
+            commands.append((['npm', 'install'], dump_dir))
+        return commands
 
-    def _offer_restart(self):
-        """The newly installed frida only takes effect in a new process."""
-        if not messagebox.askyesno(self.t('m_done_t'), self.t('m_restart_now')):
+    def _run_command(self, command, cwd):
+        """Run one install command, logging its output; True on success."""
+        self.post(self.log, '$ ' + ' '.join(command))
+        try:
+            process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True, encoding='utf-8',
+                                       errors='replace', shell=IS_WINDOWS and command[0] == 'npm',
+                                       creationflags=NO_WINDOW)
+        except OSError as error:
+            self.post(self.log, Text('log_exec_failed', error=error))
+            if command[0] == 'npm':
+                self.post(self.log, Text('log_need_node'))
+            return False
+        for line in process.stdout:
+            if line.strip():
+                self.post(self.log, '  ' + line.rstrip())
+        code = process.wait()
+        if code != 0:
+            self.post(self.log, Text('log_cmd_failed', code=code))
+            return False
+        return True
+
+    def _install_worker(self, version, dump_dir, then):
+        """Install frida `version` side by side with the others; then() runs once Frida reconnects."""
+        ok = False
+        try:
+            commands = self._install_commands(version, dump_dir)
+            frida_versions.prepare_install(version)
+            if self._run_command(*commands[0]):
+                frida_versions.finish_install(version)
+                ok = all(self._run_command(*command) for command in commands[1:])
+            else:
+                shutil.rmtree(frida_versions.staging(version), ignore_errors=True)
+        except OSError as error:
+            self.post(self.log, Text('log_exec_failed', error=error))
+        finally:
+            self.post(self._install_finished, version, ok, then)
+
+    def _install_finished(self, version, ok, then):
+        self.installing = False
+        self._checks_changed()
+        if not ok:
+            if self.ssh is not None and self.frida_version is None:
+                self.set_frida_state(Text('state_failed'), 'error')
             return
-        self._save_config()
-        subprocess.Popen([sys.executable, os.path.join(script_dir, 'ipa_extractor.py')], cwd=script_dir)
-        self.on_close()
+        self.log(Text('log_frida_installed', version=version))
+        # No restart needed: reconnect so the best version for this device is picked again.
+        if self.ssh is not None and not self.dumping and dump_dir_status(self.var_dump_dir.get().strip()) == 'ok':
+            self._drop_frida()
+            self.connect_frida(then)
 
     # --------------------------------------------------------------- close
     def on_close(self):

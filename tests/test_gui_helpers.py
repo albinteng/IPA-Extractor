@@ -100,6 +100,53 @@ class DumpDirTests(unittest.TestCase):
             self.assertEqual(ipa_extractor.dump_dir_status(path), 'ok')
 
 
+class FridaVersionTests(unittest.TestCase):
+    def test_pick_prefers_exact_then_newest_of_same_major(self):
+        import frida_versions
+        versions = ['17.24.3', '17.5.1', '16.6.6', '16.1.0']
+        self.assertEqual(frida_versions.pick('17.24.3', versions), '17.24.3')
+        self.assertEqual(frida_versions.pick('17.30.0', versions), '17.24.3')
+        self.assertEqual(frida_versions.pick('16.7.0', versions), '16.6.6')
+        self.assertIsNone(frida_versions.pick('15.2.2', versions))
+        self.assertIsNone(frida_versions.pick(None, versions))
+
+    def test_only_complete_installs_are_listed(self):
+        import frida_versions
+        with tempfile.TemporaryDirectory() as root:
+            for name in ('16.6.6', '17.24.3', '17.5.1', '17.9.9.partial', 'notes'):
+                os.makedirs(os.path.join(root, name))
+            for name in ('16.6.6', '17.24.3', '17.5.1'):
+                open(os.path.join(root, name, frida_versions.COMPLETE), 'w').close()
+            os.makedirs(os.path.join(root, '18.0.0'))  # pip never finished
+            self.assertEqual(frida_versions.installed(root), ['17.24.3', '17.5.1', '16.6.6'])
+            frida_versions.remove('17.5.1', root)
+            self.assertEqual(frida_versions.installed(root), ['17.24.3', '16.6.6'])
+
+    def test_finish_install_replaces_previous_copy(self):
+        import frida_versions
+        with tempfile.TemporaryDirectory() as root:
+            frida_versions.prepare_install('17.24.3', root)
+            open(os.path.join(frida_versions.staging('17.24.3', root), 'new'), 'w').close()
+            os.makedirs(os.path.join(root, '17.24.3'))
+            open(os.path.join(root, '17.24.3', 'old'), 'w').close()
+            frida_versions.finish_install('17.24.3', root)
+            self.assertEqual(sorted(os.listdir(os.path.join(root, '17.24.3'))), [frida_versions.COMPLETE, 'new'])
+            self.assertFalse(os.path.exists(frida_versions.staging('17.24.3', root)))
+
+    def test_env_puts_version_folder_first(self):
+        import frida_versions
+        env = frida_versions.env('17.24.3', {'PYTHONPATH': 'elsewhere'}, root='versions')
+        self.assertEqual(env['PYTHONPATH'].split(os.pathsep),
+                         [os.path.join('versions', '17.24.3'), 'elsewhere'])
+        self.assertEqual(frida_versions.env('16.6.6', {}, root='v')['PYTHONPATH'], os.path.join('v', '16.6.6'))
+
+    def test_gui_does_not_import_frida(self):
+        code = 'import sys, ipa_extractor; print("frida" in sys.modules)'
+        output = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True,
+                                text=True, check=True).stdout
+        self.assertEqual(output.strip(), 'False')
+
+
 class ErrorClassificationTests(unittest.TestCase):
     def test_known_errors(self):
         import ipa_extractor
