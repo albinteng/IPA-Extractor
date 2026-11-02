@@ -13,6 +13,7 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi (
 - App list read over SSH with name, bundle ID, version, encryption state, 32/64-bit architecture, Team ID, signer and developer.
 - Filters (user apps, non-Apple apps, encrypted apps), search, and checkboxes with bulk actions, including *Check failed apps*, *Check partially decrypted apps* and *Check unextracted apps*.
 - Batch extraction with per-app status and an overall progress bar.
+- Every decrypted IPA is checked on the computer, executable by executable and slice by slice. Files frida-ios-dump left encrypted (app extensions, Watch apps, frameworks the app had not loaded, 32-bit slices) are then decrypted on the device and patched in (iOS 15 and earlier).
 - Large decrypted batches stay stable: each launched app is closed after dumping, a stuck `frida-server` is detected, restarted and the app retried, and the batch pauses after repeated Frida failures.
 - Configurable file names from `{name}`, `{bundle}`, `{version}`, `{build}` and `{type}`, with a preview and clash detection.
 - Separate or shared output folders for decrypted and original IPAs.
@@ -86,7 +87,7 @@ For decrypted IPAs, keep the device unlocked with the screen on. To set up decry
 | --- | --- |
 | General | Language (*Automatic* follows the system), font (*Automatic* picks the best installed font for the language), text size |
 | Extraction | File name templates (default `{name}_{bundle}_{version}_{type}`), separate output folders (default `output_decrypted` and `output_encrypted` next to the tool) |
-| Frida | frida-ios-dump folder (*Install frida-ios-dump* downloads it when the folder is not set up), *Install Frida dependencies*, Frida port, restart frida-server and retry on errors, close each app after decrypting it |
+| Frida | frida-ios-dump folder (*Install frida-ios-dump* downloads it when the folder is not set up), *Install Frida dependencies*, Frida port, restart frida-server and retry on errors, close each app after decrypting it, decrypt files frida-ios-dump left encrypted (on by default) |
 
 Defaults: SSH port 22 with no account, Frida port 27042, output folders `output_decrypted` and `output_encrypted` next to the tool, frida-ios-dump in a `frida-ios-dump` folder beside the tool's folder, *Automatic* language and font, text size 10 (13 on macOS).
 
@@ -98,7 +99,7 @@ Settings are stored in `settings.json` next to the tool, so they move with its f
 
 ## Limitations
 
-- **App extensions are not decrypted.** frida-ios-dump decrypts only code loaded in the app's own process. Widgets, share extensions and other `.appex` bundles run as separate processes and stay encrypted, as can frameworks the app had not loaded yet. The main executable is always decrypted. [flexdecrypt](https://github.com/JohnCoates/flexdecrypt) can decrypt such files on the device afterwards.
+- **Files frida-ios-dump leaves encrypted are decrypted on the device only up to iOS 15.** frida-ios-dump decrypts only code loaded in the app's own process, so widgets, share extensions and other `.appex` bundles, Watch apps, frameworks the app had not loaded yet and 32-bit slices stay encrypted. The tool then decrypts them from inside the running app with `mremap_encrypted` and patches them into the IPA. This needs iOS 15 or earlier (iOS 16 refuses it) and an app installed with the device's own Apple ID: apps installed from an already decrypted or re-signed IPA have no key on the device. Such IPAs are named `partial-decrypted`, and the log lists each file and why.
 - Offloaded apps (*Settings → General → iPhone Storage → Offload App*) keep only a placeholder on the device. They are marked in the list and skipped; reinstall them from the App Store first.
 - Apps that cannot launch on the device (crashes, 32-bit apps on iOS 11+, invalid licences) cannot be decrypted; extract the original IPA instead.
 

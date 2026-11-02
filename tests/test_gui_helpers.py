@@ -150,10 +150,10 @@ class FridaVersionTests(unittest.TestCase):
 def thin_macho(cpu, subtype, cryptid, is64=True):
     """Minimal Mach-O with one LC_ENCRYPTION_INFO(_64) and some code after the load commands."""
     if is64:
-        command = struct.pack('<IIIIII', 0x2C, 24, 0x4000, 0x1000, cryptid, 0)
+        command = struct.pack('<IIIIII', 0x2C, 24, 0x100, 0x40, cryptid, 0)
         header = struct.pack('<IiiIIIII', 0xFEEDFACF, cpu, subtype, 2, 1, len(command), 0, 0)
     else:
-        command = struct.pack('<IIIII', 0x21, 20, 0x4000, 0x1000, cryptid)
+        command = struct.pack('<IIIII', 0x21, 20, 0x100, 0x40, cryptid)
         header = struct.pack('<IiiIIII', 0xFEEDFACE, cpu, subtype, 2, 1, len(command), 0)
     return header + command + b'\xAA' * 300
 
@@ -171,7 +171,7 @@ def fat_macho(*slices):
     return (table + b''.join(entries)).ljust(0x4000, b'\0') + body
 
 
-class VerifyTests(unittest.TestCase):
+class IpaMixin:
     ARM64 = (app_info.CPU_TYPE_ARM64, 0)
     ARMV7 = (app_info.CPU_TYPE_ARM, 9)
 
@@ -191,6 +191,9 @@ class VerifyTests(unittest.TestCase):
     def verify(self, files):
         import ipa_verify
         return ipa_verify.verify_ipa(self.ipa(files))
+
+
+class VerifyTests(IpaMixin, unittest.TestCase):
 
     def test_fully_decrypted(self):
         import ipa_verify
@@ -247,6 +250,55 @@ class VerifyTests(unittest.TestCase):
         result = self.verify({'X': thin_macho(*self.ARM64, 0)[:40]})
         self.assertEqual(result.status, ipa_verify.PARTIAL)
         self.assertTrue(result.files[0].error)
+
+
+class RepairTests(IpaMixin, unittest.TestCase):
+    def test_patches_decrypted_slices_into_ipa(self):
+        import ipa_repair
+        import ipa_verify
+        import zipfile
+        fat = fat_macho(self.ARMV7 + (thin_macho(*self.ARMV7, 1, is64=False),),
+                        self.ARM64 + (thin_macho(*self.ARM64, 1),))
+        path = self.ipa({'X': thin_macho(*self.ARM64, 0), 'PlugIns/E.appex/E': thin_macho(*self.ARM64, 1),
+                         'PlugIns/F.appex/F': fat})
+        with zipfile.ZipFile(path) as archive:
+            before = {i.filename: (archive.read(i), i.external_attr, i.date_time) for i in archive.infolist()}
+        jobs = ipa_repair.plan(ipa_verify.verify_ipa(path), '/var/containers/Bundle/Application/U/X.app')
+        self.assertEqual([j.device_path for j in jobs], ['/var/containers/Bundle/Application/U/X.app/PlugIns/E.appex/E',
+                                                         '/var/containers/Bundle/Application/U/X.app/PlugIns/F.appex/F'])
+        with tempfile.TemporaryDirectory() as work:
+            for job in jobs:
+                for index, slice_ in enumerate(job.slices):
+                    if job.id == '1' and slice_.arch == 'armv7':
+                        continue  # this slice failed on the device
+                    with open(os.path.join(work, '{}_{}.bin'.format(job.id, index)), 'wb') as handle:
+                        handle.write(b'\x1f\x20\x03\xd5' * (slice_.cryptsize // 4))  # nop
+                    job.done.add(index)
+            self.assertEqual(ipa_repair.apply(path, jobs, work), 2)
+        result = ipa_verify.verify_ipa(path)
+        self.assertEqual(result.status, ipa_verify.PARTIAL_32BIT)  # only F's armv7 slice is left
+        with zipfile.ZipFile(path) as archive:
+            after = {i.filename: (archive.read(i), i.external_attr, i.date_time) for i in archive.infolist()}
+        self.assertEqual(list(after), list(before))
+        for name in ('Payload/X.app/X', 'Payload/X.app/Info.plist', 'Payload/X.app/icon.png'):
+            self.assertEqual(after[name], before[name])
+        patched = after['Payload/X.app/PlugIns/E.appex/E'][0]
+        self.assertEqual(len(patched), len(before['Payload/X.app/PlugIns/E.appex/E'][0]))
+        self.assertEqual(patched[0x100:0x104], b'\x1f\x20\x03\xd5')
+
+    def test_size_mismatch_is_not_repaired(self):
+        import ipa_repair
+        import ipa_verify
+        path = self.ipa({'PlugIns/E.appex/E': thin_macho(*self.ARM64, 1)})
+        jobs = ipa_repair.plan(ipa_verify.verify_ipa(path), '/app/X.app')
+
+        class FakeSFTP:
+            def stat(self, path):
+                return type('Stat', (), {'st_size': 1})()
+
+        ipa_repair.check_sizes(FakeSFTP(), jobs, path)
+        self.assertEqual(jobs[0].error[0], 'mismatch')
+        self.assertEqual(ipa_repair.apply(path, jobs, '.'), 0)
 
 
 class ErrorClassificationTests(unittest.TestCase):

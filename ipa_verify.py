@@ -29,11 +29,21 @@ NO_MACHO = 'no-macho'
 
 
 class Slice:
-    __slots__ = ('arch', 'encrypted')
+    """One architecture of a Mach-O file. Offsets are from the start of the file, so the encrypted
+    range is [offset + cryptoff, offset + cryptoff + cryptsize) and cryptid sits at cryptid_at."""
+    __slots__ = ('arch', 'encrypted', 'cpu', 'subtype', 'offset', 'cryptoff', 'cryptsize', 'cryptid', 'cryptid_at')
 
-    def __init__(self, arch, encrypted):
+    def __init__(self, arch, encrypted, cpu=0, subtype=0, offset=0, cryptoff=0, cryptsize=0, cryptid=0,
+                 cryptid_at=None):
         self.arch = arch
         self.encrypted = encrypted
+        self.cpu = cpu
+        self.subtype = subtype
+        self.offset = offset
+        self.cryptoff = cryptoff
+        self.cryptsize = cryptsize
+        self.cryptid = cryptid
+        self.cryptid_at = cryptid_at
 
     @property
     def is_64bit(self):
@@ -63,22 +73,28 @@ class _Forward:
 
 def _thin_slice(f):
     """Parse the Mach-O header and load commands at f's position."""
+    base = f.position
     magic = struct.unpack('<I', f.read(4))[0]
     if magic not in (MH_MAGIC, MH_MAGIC_64):
         raise ValueError('fat slice is not a Mach-O')
-    header = f.read((32 if magic == MH_MAGIC_64 else 28) - 4)
+    header_size = 32 if magic == MH_MAGIC_64 else 28
+    header = f.read(header_size - 4)
     cpu, subtype, _, ncmds, sizeofcmds = struct.unpack_from('<iiIII', header, 0)
     commands = f.read(sizeofcmds)
-    encrypted = False
+    result = Slice(arch_name(cpu, subtype), False, cpu, subtype, base)
     offset = 0
     for _ in range(ncmds):
         cmd, size = struct.unpack_from('<II', commands, offset)
         if size < 8:
             raise ValueError('bad load command')
         if cmd in (LC_ENCRYPTION_INFO, LC_ENCRYPTION_INFO_64):
-            encrypted = encrypted or struct.unpack_from('<I', commands, offset + 16)[0] != 0
+            cryptoff, cryptsize, cryptid = struct.unpack_from('<III', commands, offset + 8)
+            if cryptid and not result.encrypted:
+                result.encrypted = True
+                result.cryptoff, result.cryptsize, result.cryptid = cryptoff, cryptsize, cryptid
+                result.cryptid_at = base + header_size + offset + 16
         offset += size
-    return Slice(arch_name(cpu, subtype), encrypted)
+    return result
 
 
 def inspect(stream):

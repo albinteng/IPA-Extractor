@@ -32,12 +32,16 @@ import app_info
 import device_apps
 import frida_versions
 import ipa_extract
+import ipa_repair
 import ipa_verify
 import i18n
 import remote
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 WORKER = os.path.join(script_dir, 'dump_worker.py')
+REPAIR_WORKER = os.path.join(script_dir, 'repair_worker.py')
+REPAIR_TIMEOUT = 600  # seconds for decrypting all still-encrypted files of one app
+REPAIR_MAX_IOS = 16   # mremap_encrypted always fails with EPERM from iOS 16 on
 PROBE = os.path.join(script_dir, 'frida_probe.py')
 PROBE_TIMEOUT = 30
 ASSETS = os.path.join(script_dir, 'assets')
@@ -62,7 +66,7 @@ DEFAULTS = dict(
     user_only=True, non_apple=False, encrypted_only=False,
     outdir=os.path.join(script_dir, 'output_decrypted'), extract_dir=os.path.join(script_dir, 'output_encrypted'),
     separate_dirs=True, name_decrypted=app_info.DEFAULT_DECRYPTED_NAME, name_original=app_info.DEFAULT_ORIGINAL_NAME,
-    dump_dir=DEFAULT_DUMP_DIR, close_after=True, restart_frida=True,
+    dump_dir=DEFAULT_DUMP_DIR, close_after=True, restart_frida=True, repair=True,
     lang=i18n.AUTO, font='', font_size=DEFAULT_FONT_SIZE,
 )
 
@@ -266,6 +270,12 @@ def frida_server_status(client):
 major = frida_versions.major
 
 
+def ios_major(device_os):
+    """12 for 'iPhone OS 12.4', None when unknown."""
+    match = re.search(r'(\d+)(?:\.\d+)*\s*$', device_os or '')
+    return int(match.group(1)) if match else None
+
+
 def is_user_app(path):
     return '/containers/Bundle/Application/' in (path or '')
 
@@ -401,6 +411,7 @@ class DumpGUI(tk.Tk):
         self.tunnel = None
         self.frida_version = None  # local frida version in use once Frida is connected
         self.device_frida_version = None
+        self.device_os = None
         self.apps = {}           # bundle -> dict(name, bundle, version, build, path, pid, info...)
         self.status = {}         # bundle -> (Text, tag)
         self.checked = set()
@@ -434,6 +445,7 @@ class DumpGUI(tk.Tk):
         self.var_dump_dir = tk.StringVar(value=c['dump_dir'])
         self.var_close_after = tk.BooleanVar(value=c['close_after'])
         self.var_restart_frida = tk.BooleanVar(value=c['restart_frida'])
+        self.var_repair = tk.BooleanVar(value=c['repair'])
         self.var_name_decrypted = tk.StringVar(value=c['name_decrypted'])
         self.var_name_original = tk.StringVar(value=c['name_original'])
         self.var_separate_dirs = tk.BooleanVar(value=c['separate_dirs'])
@@ -800,6 +812,10 @@ class DumpGUI(tk.Tk):
         # Only decrypting launches apps; original IPAs are copied without running them.
         ttk.Checkbutton(frida, text=self.t('close_after'), variable=self.var_close_after).grid(
             row=7, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        # R2: decrypt what frida-ios-dump left encrypted, from inside the app on the device.
+        repair = ttk.Checkbutton(frida, text=self.t('repair'), variable=self.var_repair)
+        repair.grid(row=8, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        Tooltip(repair, self.t('repair_tip'))
         frida.columnconfigure(1, weight=1)
         tabs.select(tab)
 
@@ -936,7 +952,7 @@ class DumpGUI(tk.Tk):
                     user_only=self.var_user_only.get(), non_apple=self.var_non_apple.get(),
                     encrypted_only=self.var_encrypted_only.get(),
                     dump_dir=self.var_dump_dir.get().strip(), close_after=self.var_close_after.get(),
-                    restart_frida=self.var_restart_frida.get(),
+                    restart_frida=self.var_restart_frida.get(), repair=self.var_repair.get(),
                     name_decrypted=self.var_name_decrypted.get(), name_original=self.var_name_original.get(),
                     separate_dirs=self.var_separate_dirs.get(), font=self.var_font.get(),
                     font_size=self.var_font_size.get())
@@ -1076,7 +1092,7 @@ class DumpGUI(tk.Tk):
             if tunnel is not None:
                 tunnel.close()
             return fail('state_failed', Text('log_frida_failed', error=detail))
-        self.post(self._frida_connected, generation, tunnel, version, then)
+        self.post(self._frida_connected, generation, tunnel, version, detail, then)
 
     def _device_frida_found(self, generation, version):
         if generation == self.generation:
@@ -1109,7 +1125,7 @@ class DumpGUI(tk.Tk):
         self._checks_changed()
         self.run_background(self._install_worker, device_version, None, then)
 
-    def _frida_connected(self, generation, tunnel, version, then):
+    def _frida_connected(self, generation, tunnel, version, device_os, then):
         self.frida_connecting = False
         self._checks_changed()
         if generation != self.generation or self.ssh is None:
@@ -1117,6 +1133,7 @@ class DumpGUI(tk.Tk):
             return
         self.tunnel = tunnel
         self.frida_version = version
+        self.device_os = device_os  # e.g. 'iPhone OS 12.4'
         self.set_frida_state(Text('state_tunnel_version', port=tunnel.local_port, version=version), 'ok')
         self.log(Text('log_frida_ok', local=tunnel.local_port, remote=self.var_frida_port.get()))
         self.log(Text('log_frida_using', version=version))
@@ -1134,7 +1151,7 @@ class DumpGUI(tk.Tk):
         self._drop_frida()
         if self.ssh is not None:
             self.ssh.close()
-        self.ssh = self.device_frida_version = None
+        self.ssh = self.device_frida_version = self.device_os = None
         self.set_ssh_state(Text(reason), 'idle' if reason == 'state_disconnected' else 'error')
         self.set_frida_state(Text('state_unused'), 'idle')
         self.btn_connect.configure(state='normal', text=self.t('connect'))
@@ -1584,7 +1601,8 @@ class DumpGUI(tk.Tk):
                        frida='127.0.0.1:{}'.format(self.tunnel.local_port), frida_version=self.frida_version,
                        outdir=outdir,
                        dump_dir=dump_dir, close_after=self.var_close_after.get(),
-                       restart_frida=self.var_restart_frida.get(), generation=self.generation, names=names)
+                       restart_frida=self.var_restart_frida.get(), generation=self.generation, names=names,
+                       repair=self.var_repair.get(), ios=self.device_os or '', ios_major=ios_major(self.device_os))
         self.run_background(self._dump_worker, jobs, options)
 
     def start_extract(self):
@@ -1690,7 +1708,11 @@ class DumpGUI(tk.Tk):
                 self.post(self.log, Text('log_retry', bundle=bundle))
             if ok:
                 consecutive_frida_errors = 0
-                ok = self._finish_dump(bundle, os.path.join(options['outdir'], name + '.ipa'), options, counts)
+                pid = options.pop('pid', None)
+                ok = self._finish_dump(bundle, os.path.join(options['outdir'], name + '.ipa'), options, counts, pid)
+                for launched in (pid, options.pop('repair_pid', None)):
+                    if launched is not None and options['close_after']:
+                        self._close_app(bundle, launched)
                 if ok:
                     counts['succeeded'] += 1
             elif self.cancel_requested.is_set():
@@ -1705,13 +1727,19 @@ class DumpGUI(tk.Tk):
                 if consecutive_frida_errors >= MAX_CONSECUTIVE_FRIDA_ERRORS:
                     paused = counts['paused'] = True
 
-    def _finish_dump(self, bundle, path, options, counts):
-        """Verify a freshly decrypted IPA (R1), name it after the result and report it (R3).
+    def _finish_dump(self, bundle, path, options, counts, pid=None):
+        """Verify a freshly decrypted IPA (R1), decrypt what is still encrypted on the device (R2),
+        name it after the result and report it (R3).
 
-        Runs on the dump thread; False when the IPA turned out to be unusable.
+        Runs on the dump thread; pid is the app dump.py launched, still running. False when the
+        IPA turned out to be unusable.
         """
+        failures = {}  # member -> (reason, error) for files the repair could not fix
         try:
             result = ipa_verify.verify_ipa(path)
+            if result.encrypted and options['repair'] and not self.cancel_requested.is_set():
+                failures = self._repair(bundle, path, result, options, pid)
+                result = ipa_verify.verify_ipa(path)
             status = result.status
         except Exception as error:  # not a readable zip: dump.py wrote a broken IPA
             self.post(self.set_status, bundle, Text('st_failed', msg=Text('verify_error', error=error)), 'failed')
@@ -1738,7 +1766,8 @@ class DumpGUI(tk.Tk):
                 except OSError as error:
                     self.post(self.log, Text('log_remove_failed', path=stale, error=error))
         files = [dict(file=ipa_verify.short_name(f.name), archs=', '.join(f.encrypted_archs) or '?',
-                      reason=ipa_verify.reason(f), error=f.error or '') for f in result.encrypted]
+                      reason=failures.get(f.name, (ipa_verify.reason(f), ''))[0],
+                      error=f.error or failures.get(f.name, ('', ''))[1]) for f in result.encrypted]
         self.post(self._set_verify, bundle, status, len(result.files), files)
         self.post(self.log, Text('log_done', bundle=bundle, path=path))
         if status == ipa_verify.DECRYPTED:
@@ -1756,6 +1785,99 @@ class DumpGUI(tk.Tk):
             self.post(self.log, Indented(Text('log_verify_file', file=file['file'], archs=file['archs'],
                                               reason=self.reason_text(file))))
         return True
+
+    def _repair(self, bundle, path, result, options, pid):
+        """Decrypt the IPA's still-encrypted files on the device and patch them in (R2).
+
+        Returns {member: (reason key, error)} for the files that stay encrypted.
+        """
+        jobs = ipa_repair.plan(result, self.apps[bundle]['path'])
+        if not jobs:
+            return {}
+        if options['ios_major'] is not None and options['ios_major'] >= REPAIR_MAX_IOS:
+            self.post(self.log, Text('log_repair_unsupported', bundle=bundle, ios=options['ios']))
+            return {job.member: ('repair_ios', '') for job in jobs}
+        self.post(self.set_status, bundle, Text('st_running', pct='100', stage=Text('stage_repair', n=len(jobs))),
+                  'running')
+        self.post(self.log, Text('log_repair_start', bundle=bundle, n=len(jobs)))
+        try:
+            sftp = self.ssh.open_sftp()
+            try:
+                ipa_repair.check_sizes(sftp, jobs, path)
+            finally:
+                sftp.close()
+            with tempfile.TemporaryDirectory(prefix='ipa-repair-') as work:
+                todo = [job for job in jobs if job.error is None]
+                if todo:
+                    self._run_repair_worker(bundle, todo, work, options, pid)
+                changed = ipa_repair.apply(path, jobs, work)
+        except Exception as error:
+            self.post(self.log, Text('log_repair_failed', bundle=bundle, error=error))
+            return {job.member: ('repair_failed', str(error)) for job in jobs}
+        failures = {}
+        for job in jobs:
+            if job.error:
+                failures[job.member] = ('repair_' + job.error[0], job.error[1])
+            elif not job.repaired:
+                error = next(iter(job.slice_errors.values()), '')
+                # The kernel has no key for the file: typically the app was not installed with
+                # this device's Apple ID (e.g. from an already decrypted or re-signed IPA).
+                nokey = '(errno 12)' in error or '(errno 1)' in error
+                failures[job.member] = ('repair_nokey' if nokey else 'repair_failed', error)
+        self.post(self.log, Text('log_repair_done', bundle=bundle, n=changed, total=len(jobs)))
+        return failures
+
+    def _run_repair_worker(self, bundle, jobs, work, options, pid):
+        """Run repair_worker.py with the device's frida; marks each job's decrypted slices."""
+        jobs_path = os.path.join(work, 'jobs.json')
+        with open(jobs_path, 'w', encoding='utf-8') as handle:
+            json.dump([job.to_json() for job in jobs], handle)
+        command = [sys.executable, '-u', REPAIR_WORKER, options['frida'], jobs_path, work, '--bundle', bundle]
+        if pid:
+            command += ['--pid', str(pid)]
+        env = dict(frida_versions.env(options['frida_version']), PYTHONIOENCODING='utf-8')
+        process = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
+                                   creationflags=NO_WINDOW)
+        self.current_process = process  # Cancel terminates it
+        by_id = {job.id: job for job in jobs}
+        timer = threading.Timer(REPAIR_TIMEOUT, process.kill)
+        timer.start()
+        output = []
+        try:
+            for line in process.stdout:
+                line = line.rstrip()
+                if not line.startswith('@@'):
+                    if line:
+                        output.append(line)
+                    continue
+                try:
+                    event = json.loads(line[2:])
+                except ValueError:
+                    continue
+                if event['type'] == 'slice':
+                    job = by_id[event['id']]
+                    if event['ok']:
+                        job.done.add(event['index'])
+                        if job.repaired:
+                            self.post(self.log, Indented(Text('log_repaired',
+                                                              file=ipa_verify.short_name(job.member))))
+                    else:
+                        job.slice_errors[event['index']] = event['error'].splitlines()[0].replace('Error: ', '', 1)
+                elif event['type'] == 'error':
+                    for job in jobs:
+                        job.error = ('frida', event['error'])
+                elif event['type'] == 'attached' and event['pid'] != pid:
+                    options['repair_pid'] = event['pid']  # relaunched; closed with the dumped one
+                elif event['type'] == 'log':
+                    self.post(self.log, '[{}] {}'.format(bundle, event['text']))
+            code = process.wait()
+        finally:
+            timer.cancel()
+            self.current_process = None
+        if code != 0 and not any(job.done or job.error for job in jobs):
+            for job in jobs:
+                job.error = ('frida', '\n'.join(output[-5:]) or self.t('exit_code', code=code))
 
     @staticmethod
     def reason_text(file):
@@ -1881,11 +2003,13 @@ class DumpGUI(tk.Tk):
         self.current_process = None
         # dump.py leaves the app running; hundreds of them would exhaust device memory
         # and get the app being dumped killed by jetsam.
-        if spawned_pid is not None and options['close_after']:
-            self._close_app(bundle, spawned_pid)
         if code == 0 and os.path.exists(os.path.join(options['outdir'], name + '.ipa')):
             report(1, Text('stage_finished'))
+            # Still running: repairing still-encrypted files attaches to it, then it is closed.
+            options['pid'] = spawned_pid
             return True, ''
+        if spawned_pid is not None and options['close_after']:
+            self._close_app(bundle, spawned_pid)
         if stalled.is_set():
             # Phrased like Frida's own error so it is classified as a timeout and retried.
             return False, 'frida.TransportError: timeout was reached (no response for {}s)'.format(STALL_TIMEOUT)

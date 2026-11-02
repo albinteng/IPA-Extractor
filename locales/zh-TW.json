@@ -274,5 +274,19 @@
   "d_verify_partial32": "砸殼驗證：{total} 個 Mach-O 中有 {n} 個仍有加密的 32 位元 slice（64 位元程式碼都已解密）",
   "d_verify_partial": "砸殼驗證：{total} 個 Mach-O 中有 {n} 個仍加密",
   "log_removed_stale": "[{bundle}] 已刪除先前的結果 {path}。",
-  "log_remove_failed": "無法刪除 {path}：{error}"
+  "log_remove_failed": "無法刪除 {path}：{error}",
+  "repair": "補完 frida-ios-dump 沒解密的檔案（iOS 15 以下）",
+  "repair_tip": "每個砸殼 IPA 完成後，把仍加密的檔案（App 擴充功能、App 沒載入的 framework、32 位元 slice）在裝置上、從執行中的 App 內解密，再替換進 IPA。裝置上的 App 版本必須和 IPA 相同。iOS 16 以上無法使用。",
+  "stage_repair": "在裝置上解密剩下的 {n} 個檔案",
+  "log_repair_start": "[{bundle}] 在裝置上解密 {n} 個仍加密的檔案…",
+  "log_repaired": "已解密 {file}",
+  "log_repair_done": "[{bundle}] 裝置上解密完成：{total} 個檔案中有 {n} 個。",
+  "log_repair_failed": "[{bundle}] 無法在裝置上解密剩下的檔案：{error}",
+  "log_repair_unsupported": "[{bundle}] 剩下的加密檔案無法在 {ios} 上解密（iOS 16 以上不允許）。",
+  "reason_repair_ios": "iOS 16 以上無法在裝置上解密",
+  "reason_repair_missing": "裝置上的 App 裡找不到這個檔案（{error}）",
+  "reason_repair_mismatch": "裝置上的檔案和 IPA 裡的不同，裝置上的 App 是其他版本（大小 {error}）",
+  "reason_repair_nokey": "裝置沒有這個檔案的金鑰，通常是 App 不是用這台裝置的 Apple ID 安裝的，例如從已砸殼或重新簽名的 IPA 安裝（{error}）",
+  "reason_repair_failed": "在裝置上解密失敗（{error}）",
+  "reason_repair_frida": "無法用 Frida 附加到 App（{error}）"
 }

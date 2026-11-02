@@ -270,5 +270,19 @@
   "d_verify_partial32": "Decryption check: {n} of {total} Mach-O files still have encrypted 32-bit slices (all 64-bit code is decrypted)",
   "d_verify_partial": "Decryption check: {n} of {total} Mach-O files are still encrypted",
   "log_removed_stale": "[{bundle}] Removed the earlier result {path}.",
-  "log_remove_failed": "Could not delete {path}: {error}"
+  "log_remove_failed": "Could not delete {path}: {error}",
+  "repair": "Decrypt files frida-ios-dump left encrypted (iOS 15 and earlier)",
+  "repair_tip": "After each decrypted IPA, files that are still encrypted (app extensions, frameworks the app had not loaded, 32-bit slices) are decrypted on the device from inside the running app and patched into the IPA. The app on the device must be the same version as the IPA. Not possible on iOS 16 and later.",
+  "stage_repair": "decrypting {n} remaining file(s) on the device",
+  "log_repair_start": "[{bundle}] Decrypting {n} still-encrypted file(s) on the device…",
+  "log_repaired": "decrypted {file}",
+  "log_repair_done": "[{bundle}] Decrypted on the device: {n} of {total} file(s).",
+  "log_repair_failed": "[{bundle}] Could not decrypt the remaining files on the device: {error}",
+  "log_repair_unsupported": "[{bundle}] The remaining encrypted files cannot be decrypted on {ios} (iOS 16 and later do not allow it).",
+  "reason_repair_ios": "cannot be decrypted on iOS 16 and later",
+  "reason_repair_missing": "not found in the app on the device ({error})",
+  "reason_repair_mismatch": "the file on the device differs from the one in the IPA, so the installed app is another version (sizes {error})",
+  "reason_repair_nokey": "the device has no key for it; usually the app was not installed with this device's Apple ID, e.g. from an already decrypted or re-signed IPA ({error})",
+  "reason_repair_failed": "decrypting on the device failed ({error})",
+  "reason_repair_frida": "could not attach to the app with Frida ({error})"
 }
