@@ -1,8 +1,13 @@
-// Frida agent for repair_worker.py: decrypts FairPlay-encrypted ranges of files on the device
-// from inside the app's own process, where the kernel holds the app's keys.
+// Frida agent for repair_worker.py: gets decrypted copies of FairPlay-encrypted ranges.
 //
-// For each encrypted slice the range is mapped from the file and handed to mremap_encrypted(),
-// which makes the kernel decrypt the pages exactly as it does when it loads code.
+// iOS 15 and earlier (decrypt/read/release): the range is mapped from the installed file and
+// handed to mremap_encrypted(), so the kernel decrypts it with the app's keys. This works in
+// frida-server's own process, so no app has to run.
+//
+// iOS 16 and later refuse that, so the system loads the code instead and it is read from memory:
+// imageBase/readAt read the decrypted image of a process (an app spawned suspended, or an app
+// extension started with launchExtension and caught suspended by spawn gating).
+//
 // Works with Frida 16 and 17 and needs no Objective-C bridge.
 
 'use strict';
@@ -34,8 +39,26 @@ function failure(call, result) {
   return call + ' failed: ' + strerror(result.errno).readUtf8String() + ' (errno ' + result.errno + ')';
 }
 
+// Objective-C through objc_msgSend, so Frida 17 needs no bridge.
+let objc = null;
+function objcApi() {
+  if (objc === null) {
+    const fn = (name, ret, args) => new NativeFunction(exported(name), ret, args);
+    const getClass = fn('objc_getClass', 'pointer', ['pointer']);
+    const registerName = fn('sel_registerName', 'pointer', ['pointer']);
+    const send = (args, ret) => fn('objc_msgSend', ret || 'pointer', ['pointer', 'pointer'].concat(args));
+    objc = {
+      cls: (name) => getClass(Memory.allocUtf8String(name)),
+      sel: (name) => registerName(Memory.allocUtf8String(name)),
+      send: send,
+      str: (text) => send(['pointer'])(objc.cls('NSString'), objc.sel('stringWithUTF8String:'), Memory.allocUtf8String(text)),
+    };
+  }
+  return objc;
+}
+
 rpc.exports = {
-  // Decrypt one slice in memory; returns an id for read()/release().
+  // Decrypt one slice in memory with mremap_encrypted; returns an id for read()/release().
   decrypt(path, offset, cryptoff, cryptsize, cryptid, cpu, subtype) {
     const fd = open.call(null, Memory.allocUtf8String(path), O_RDONLY);
     if (fd.value < 0) {
@@ -64,7 +87,7 @@ rpc.exports = {
     }
   },
 
-  // Bytes [start, start + size) of the decrypted range.
+  // Bytes [start, start + size) of a range decrypted by decrypt().
   read(id, start, size) {
     const mapping = mappings.get(id);
     return mapping.base.add(mapping.delta + start).readByteArray(size);
@@ -76,5 +99,46 @@ rpc.exports = {
       munmap(mapping.base, mapping.length);
       mappings.delete(id);
     }
+  },
+
+  // Where the image whose path ends with suffix is loaded, with its CPU type, or null.
+  // A process spawned suspended has no module list yet, but the kernel has already mapped
+  // (and set up decryption for) its main executable.
+  imageBase(suffix) {
+    let base = null;
+    const module = Process.enumerateModules().find((m) => m.path.endsWith(suffix));
+    if (module) {
+      base = module.base;
+    } else {
+      const range = Process.enumerateRanges('r--').find(
+        (r) => r.file && r.file.offset === 0 && r.file.path.endsWith(suffix));
+      if (range) {
+        base = range.base;
+      }
+    }
+    if (base === null) {
+      return null;
+    }
+    return { base: base.toString(), cpu: base.add(4).readS32(), subtype: base.add(8).readS32() };
+  },
+
+  readAt(base, offset, size) {
+    return ptr(base).add(offset).readByteArray(size);
+  },
+
+  // Ask the system to start an app extension, as a host does when it uses one. The caller has
+  // spawn gating on, so the extension stops before running any code. Returns what was found.
+  launchExtension(identifier) {
+    const o = objcApi();
+    const error = Memory.alloc(Process.pointerSize);
+    const extension = o.send(['pointer', 'pointer'])(o.cls('NSExtension'), o.sel('extensionWithIdentifier:error:'),
+      o.str(identifier), error);
+    if (extension.isNull()) {
+      return { found: false };
+    }
+    const items = o.send([])(o.cls('NSArray'), o.sel('array'));
+    // Fails once the gated extension does not answer; by then it has been read.
+    o.send(['pointer', 'pointer'])(extension, o.sel('beginExtensionRequestWithInputItems:error:'), items, error);
+    return { found: true };
   },
 };

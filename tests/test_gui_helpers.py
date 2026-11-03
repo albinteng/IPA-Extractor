@@ -181,7 +181,8 @@ class IpaMixin:
         handle.close()
         self.addCleanup(os.remove, handle.name)
         with zipfile.ZipFile(handle.name, 'w', zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr('Payload/X.app/Info.plist', b'<plist/>' * 10)
+            if 'Info.plist' not in files:
+                archive.writestr('Payload/X.app/Info.plist', b'<plist/>' * 10)
             archive.writestr('Payload/X.app/icon.png', b'\x89PNG' + b'\0' * 100)
             archive.writestr('Payload/X.app/Java.class', struct.pack('>II', 0xCAFEBABE, 0x34) + b'\0' * 40)
             for name, data in files.items():
@@ -286,6 +287,26 @@ class RepairTests(IpaMixin, unittest.TestCase):
         self.assertEqual(len(patched), len(before['Payload/X.app/PlugIns/E.appex/E'][0]))
         self.assertEqual(patched[0x100:0x104], b'\x1f\x20\x03\xd5')
 
+    def test_plan_knows_executables_and_extension_ids(self):
+        import ipa_repair
+        import ipa_verify
+        import plistlib
+        plist = lambda executable, identifier: plistlib.dumps(
+            {'CFBundleExecutable': executable, 'CFBundleIdentifier': identifier})
+        path = self.ipa({'X': thin_macho(*self.ARM64, 1),
+                         'PlugIns/E.appex/E': thin_macho(*self.ARM64, 1),
+                         'PlugIns/E.appex/Info.plist': plist('E', 'com.example.app.share'),
+                         'Frameworks/F.framework/F': thin_macho(*self.ARM64, 1),
+                         'Watch/W.app/W': thin_macho(*self.ARM64, 1),
+                         'Data/plugin.bin': thin_macho(*self.ARM64, 1),
+                         'Info.plist': plist('X', 'com.example.app')})
+        jobs = ipa_repair.plan(ipa_verify.verify_ipa(path), '/var/containers/Bundle/Application/U/X.app', path)
+        found = {ipa_verify.short_name(j.member): (j.kind, j.extension) for j in jobs}
+        self.assertEqual(found, {'X': ('main', None), 'PlugIns/E.appex/E': ('appex', 'com.example.app.share'),
+                                 'Frameworks/F.framework/F': ('framework', None), 'Watch/W.app/W': ('watch', None),
+                                 'Data/plugin.bin': ('other', None)})
+        self.assertEqual(jobs[1].to_json()['suffix'], '/X.app/PlugIns/E.appex/E')
+
     def test_size_mismatch_is_not_repaired(self):
         import ipa_repair
         import ipa_verify
@@ -299,6 +320,248 @@ class RepairTests(IpaMixin, unittest.TestCase):
         ipa_repair.check_sizes(FakeSFTP(), jobs, path)
         self.assertEqual(jobs[0].error[0], 'mismatch')
         self.assertEqual(ipa_repair.apply(path, jobs, '.'), 0)
+
+
+class DecryptMethodTests(unittest.TestCase):
+    def test_method_follows_ios_version(self):
+        import ipa_extractor
+        self.assertEqual(ipa_extractor.decrypt_method('iPhone OS 12.4'), 'mremap')
+        self.assertEqual(ipa_extractor.decrypt_method('iPhone OS 15.8.3'), 'mremap')
+        self.assertEqual(ipa_extractor.decrypt_method('iPhone OS 16.1.2'), 'memory')
+        self.assertEqual(ipa_extractor.decrypt_method('iPhone OS 17.0'), 'memory')
+        self.assertEqual(ipa_extractor.decrypt_method(None), 'mremap')
+
+    def test_versions(self):
+        import ipa_repair
+        self.assertEqual(ipa_repair.version_tuple('iPhone OS 16.1.2'), (16, 1, 2))
+        self.assertGreater(ipa_repair.version_tuple('17.0'), ipa_repair.version_tuple('iPhone OS 16.1.2'))
+        self.assertLess(ipa_repair.version_tuple('16.1'), ipa_repair.version_tuple('16.1.2'))
+        self.assertEqual(ipa_repair.version_tuple(''), ())
+
+    def test_repair_failures(self):
+        import ipa_extractor
+        self.assertEqual(ipa_extractor.repair_failure('unsupported:framework'), ('repair_unsupported_framework', ''))
+        self.assertEqual(ipa_extractor.repair_failure('mremap_encrypted failed: Cannot allocate memory (errno 12)')[0],
+                         'repair_nokey')
+        self.assertEqual(ipa_extractor.repair_failure('TransportError: timeout')[0], 'repair_failed')
+
+
+class GatedLaunchTests(unittest.TestCase):
+    def test_frida_launchd_pids(self):
+        import ipa_extractor
+        listing = ('PID\tStatus\tLabel\n19362\t-9\tre.frida.server\n-\t0\tre.frida.helper\n'
+                   '88\t0\tcom.apple.backboardd\n')
+        self.assertEqual(ipa_extractor.frida_launchd_pids(listing), [19362])
+
+    def test_gated_launches(self):
+        import ipa_extractor
+        ps = ('  20058 T    xpcproxy com.apple.siriinferenced\n'
+              '  20071 T    xpcproxy com.adguard.AdguardExtension.SafariWebExtension\n'
+              '  20072 Ss   xpcproxy com.adguard.AdguardExtension.Tunnel\n'
+              '  20080 T    /private/var/containers/Bundle/Application/X/Adguard.app/Adguard\n')
+        self.assertEqual(ipa_extractor.gated_launches(ps, 'com.adguard.AdguardExtension'), ([20071], [20058]))
+        self.assertEqual(ipa_extractor.gated_launches(ps), ([], [20058, 20071]))
+
+    def test_gated_launches_match_the_app_only(self):
+        import ipa_extractor
+        ps = ('  1 T    xpcproxy UIKitApplication:com.foo[8a3c][rb-legacy]\n'  # the app itself
+              '  2 T    xpcproxy com.foo.Share(6F2B)\n'
+              '  3 T    xpcproxy com.foobar.Widget\n'                         # another app
+              '  4 T    xpcproxy UIKitApplication:com.foobar[11aa]\n')
+        self.assertEqual(ipa_extractor.gated_launches(ps, 'com.foo'), ([1, 2], [3, 4]))
+
+    def test_release_gated_resumes_frida_server_and_services(self):
+        import ipa_extractor
+        from unittest import mock
+        outputs = {'launchctl list': (0, '-\t0\tcom.apple.x\n812\t-9\tre.frida.server\n'),
+                   'ps -A -o pid=,stat=,args=': (0, ' 5 T xpcproxy com.foo.Ext\n 6 T xpcproxy com.apple.healthd\n')}
+        gui = mock.Mock()
+        gui._as_root.side_effect = lambda options, command: outputs.get(command, (0, ''))
+        gui._resume_frida_server = lambda options: ipa_extractor.DumpGUI._resume_frida_server(gui, options)
+        ipa_extractor.DumpGUI._release_gated(gui, {}, 'com.foo')
+        commands = [call.args[1] for call in gui._as_root.call_args_list]
+        self.assertEqual([c for c in commands if c.startswith('kill')], ['kill -CONT 812', 'kill -9 5', 'kill -CONT 6'])
+
+    def test_release_gated_survives_ssh_errors(self):
+        import ipa_extractor
+        from unittest import mock
+        gui = mock.Mock()
+        gui._as_root.side_effect = OSError('channel closed')
+        ipa_extractor.DumpGUI._resume_frida_server(gui, {})
+        ipa_extractor.DumpGUI._release_gated(gui, {}, 'com.foo')  # neither raises
+
+
+class DumpMethodTests(unittest.TestCase):
+    def test_setting_falls_back_to_direct(self):
+        import ipa_extractor
+        self.assertEqual(ipa_extractor.DEFAULTS['dump_method'], ipa_extractor.METHOD_FRIDA_DIRECT)
+        for value in ipa_extractor.DUMP_METHODS:
+            self.assertEqual(ipa_extractor.dump_method_setting(value), value)
+        for value in ('direct', 'dump', '', None):  # values of development builds, or none at all
+            self.assertEqual(ipa_extractor.dump_method_setting(value), ipa_extractor.METHOD_FRIDA_DIRECT)
+        # Method names say what they need, leaving room for methods without Frida.
+        self.assertTrue(all(value.startswith('frida_') for value in ipa_extractor.DUMP_METHODS))
+
+
+class RepairJobTests(IpaMixin, unittest.TestCase):
+    def job(self, slices=2):
+        import ipa_repair
+        import ipa_verify
+        return ipa_repair.Job('0', 'Payload/X.app/PlugIns/E.appex/E', '/app/X.app/PlugIns/E.appex/E',
+                              [ipa_verify.Slice('arm64', True, *self.ARM64, 0, 0x4000, 0x100, 1, 0)] * slices,
+                              kind='appex', extension='com.x.e', min_os='16.0')
+
+    def test_connection_lost_and_reset(self):
+        import ipa_repair
+        job = self.job()
+        job.done.add(0)
+        self.assertFalse(job.connection_lost())
+        self.assertTrue(job.untried())
+        job.slice_errors[1] = 'unsupported:slice'
+        self.assertFalse(job.connection_lost())
+        self.assertFalse(job.untried())
+        for error in ('TransportError: the connection is closed', ipa_repair.STALLED.format(90),
+                      'TransportError: timeout was reached',
+                      'TransportError: error receiving data: Connection reset by peer',
+                      'TransportError: error receiving data: An established connection was aborted',
+                      'lost the connection to frida-server'):
+            job.slice_errors[1] = error
+            self.assertTrue(job.connection_lost(), error)
+        job.slice_errors = {}
+        job.error = ('frida', 'ServerNotRunningError: unable to connect to remote frida-server')
+        self.assertTrue(job.connection_lost())
+        job.reset()
+        self.assertEqual((job.error, job.slice_errors, job.done), (None, {}, {0}))  # decrypted slices stay
+        self.assertTrue(job.untried())
+
+    def test_to_json_tells_the_worker_what_to_launch(self):
+        data = self.job(1).to_json()
+        self.assertEqual((data['kind'], data['extension'], data['suffix']),
+                         ('appex', 'com.x.e', '/X.app/PlugIns/E.appex/E'))
+        self.assertEqual(data['slices'][0]['cryptsize'], 0x100)
+
+    def test_framework_with_info_plist_is_a_framework(self):
+        import ipa_repair
+        # A framework's Info.plist names its executable as well; that must not make it 'other'.
+        executables = {'': 'X', 'Frameworks/F.framework': 'F', 'PlugIns/E.appex': 'E', 'Apps/N.app': 'N'}
+        self.assertEqual(ipa_repair.kind('Frameworks/F.framework/F', executables), 'framework')
+        self.assertEqual(ipa_repair.kind('Frameworks/libz.dylib', executables), 'framework')
+        self.assertEqual(ipa_repair.kind('PlugIns/E.appex/Frameworks/G.framework/G', executables), 'framework')
+        self.assertEqual(ipa_repair.kind('X', executables), 'main')
+        self.assertEqual(ipa_repair.kind('PlugIns/E.appex/E', executables), 'appex')
+        self.assertEqual(ipa_repair.kind('Apps/N.app/N', executables), 'other')
+        self.assertEqual(ipa_repair.kind('Watch/W.app/W', executables), 'watch')
+
+    def test_plan_reads_minimum_os_versions(self):
+        import ipa_repair
+        import ipa_verify
+        import plistlib
+        plist = lambda executable, identifier, minimum: plistlib.dumps(
+            {'CFBundleExecutable': executable, 'CFBundleIdentifier': identifier, 'MinimumOSVersion': minimum})
+        path = self.ipa({'X': thin_macho(*self.ARM64, 1), 'Info.plist': plist('X', 'com.x', '15.0'),
+                         'PlugIns/G.appex/G': thin_macho(*self.ARM64, 1),
+                         'PlugIns/G.appex/Info.plist': plist('G', 'com.x.g', '17.0'),
+                         'Frameworks/F.framework/F': thin_macho(*self.ARM64, 1),
+                         'Frameworks/F.framework/Info.plist': plist('F', 'com.x.f', '12.0')})
+        jobs = ipa_repair.plan(ipa_verify.verify_ipa(path), '/app/X.app', path)
+        found = {ipa_verify.short_name(j.member): (j.kind, j.min_os) for j in jobs}
+        self.assertEqual(found, {'X': ('main', '15.0'), 'PlugIns/G.appex/G': ('appex', '17.0'),
+                                 'Frameworks/F.framework/F': ('framework', '12.0')})
+        self.assertGreater(ipa_repair.version_tuple('17.0'), ipa_repair.version_tuple('iPhone OS 16.1.2'))
+
+
+class RepairWorkerHelperTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('repair_worker', ROOT / 'repair_worker.py')
+        self.worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.worker)  # frida itself is only imported by Worker()
+
+    def test_clean_error(self):
+        clean = self.worker.clean
+        self.assertEqual(clean('Error: mremap_encrypted failed (errno 1)\n    at decrypt (agent.js:10)'),
+                         'mremap_encrypted failed (errno 1)')
+        self.assertEqual(clean('TransportError: the connection is closed'), 'TransportError: the connection is closed')
+        self.assertEqual(clean(''), '')
+
+    def test_belongs_to(self):
+        belongs_to = self.worker.belongs_to
+        self.assertTrue(belongs_to('com.foo', 'com.foo'))
+        self.assertTrue(belongs_to('com.foo.Share', 'com.foo'))
+        self.assertFalse(belongs_to('com.foobar', 'com.foo'))
+        self.assertFalse(belongs_to('com.apple.Preferences', 'com.foo'))
+        self.assertFalse(belongs_to(None, 'com.foo'))
+        self.assertFalse(belongs_to('com.foo', ''))
+
+    def test_same_cpu_ignores_capability_bits(self):
+        same_cpu = self.worker.same_cpu
+        item = {'cpu': app_info.CPU_TYPE_ARM64, 'subtype': 0}
+        self.assertTrue(same_cpu({'cpu': app_info.CPU_TYPE_ARM64, 'subtype': 0x80000000}, item))
+        self.assertFalse(same_cpu({'cpu': app_info.CPU_TYPE_ARM64, 'subtype': 2}, item))  # arm64e
+        self.assertFalse(same_cpu({'cpu': app_info.CPU_TYPE_ARM, 'subtype': 0}, item))
+
+    def test_extension_hosts_learn_from_each_lookup(self):
+        from unittest import mock
+        worker = self.worker.Worker.__new__(self.worker.Worker)  # no frida: the lookups are faked
+        worker.hosts, worker.app_running = {}, True
+        worker.host_order = list(self.worker.EXTENSION_HOSTS)
+        self.assertEqual(worker.host_order[-1], 'app')  # asked last: a running app tends to hang
+        asked = []
+
+        def catch(host, job):
+            asked.append(host)
+            if host == 'AuthenticationServicesAgent':
+                raise RuntimeError('TransportError: timeout was reached')
+            return 42 if host == 'spawn:com.apple.Preferences' else None
+
+        worker.catch_extension = catch
+        worker.device = mock.Mock()
+        worker.read_image = mock.Mock()
+        with mock.patch.object(self.worker, 'load_agent'), mock.patch.object(self.worker, 'emit'):
+            worker.extension({'id': '0', 'slices': [{}], 'extension': 'com.x.a'})
+            self.assertEqual(asked, ['SpringBoard', 'AuthenticationServicesAgent', 'spawn:com.apple.Preferences'])
+            asked.clear()
+            worker.extension({'id': '1', 'slices': [{}], 'extension': 'com.x.b'})
+        self.assertEqual(asked, ['spawn:com.apple.Preferences'])  # the host that worked first, the hung one dropped
+        self.assertEqual(worker.host_order, ['spawn:com.apple.Preferences', 'SpringBoard', 'app'])
+
+    def test_alive_is_throttled(self):
+        from unittest import mock
+        out = io.StringIO()
+        with mock.patch.object(self.worker.sys, 'stdout', out), \
+                mock.patch.object(self.worker.time, 'monotonic', side_effect=[100.0, 100.0, 105.0, 111.0, 111.0]):
+            self.worker._last_emit[0] = 0.0
+            self.worker.alive()   # 100: long silence -> emits (and records 100)
+            self.worker.alive()   # 105: too soon
+            self.worker.alive()   # 111: due again
+        events = [json.loads(line[2:])['type'] for line in out.getvalue().splitlines()]
+        self.assertEqual(events, ['alive', 'alive'])
+
+
+class RunningPidTests(unittest.TestCase):
+    def test_extensions_are_not_the_app(self):
+        import device_apps
+        from unittest import mock
+        app = '/private/var/containers/Bundle/Application/U/Adguard.app'
+        tunnel = '10496 /private/var/containers/Bundle/Application/U/Adguard.app/PlugIns/Tunnel.appex/Tunnel\n'
+        with mock.patch.object(device_apps.remote, 'run', return_value=(0, tunnel)):
+            self.assertEqual(device_apps.running_pid(None, app), 0)  # only the VPN extension runs
+        with mock.patch.object(device_apps.remote, 'run',
+                               return_value=(0, tunnel + '10500 /var/containers/Bundle/Application/U/Adguard.app/Adguard\n')):
+            self.assertEqual(device_apps.running_pid(None, app), 10500)
+
+
+class SuspendedPidsTests(unittest.TestCase):
+    def test_finds_stopped_processes_of_the_bundle(self):
+        import device_apps
+        from unittest import mock
+        ps = ('  10 T    /private/var/containers/Bundle/Application/U/X.app/X\n'
+              '  11 T    /var/containers/Bundle/Application/U/X.app/PlugIns/E.appex/E\n'
+              '  12 Ss   /private/var/containers/Bundle/Application/U/X.app/PlugIns/F.appex/F\n'
+              '  13 T    /private/var/containers/Bundle/Application/U/X.appx/Y\n'
+              '  14 T    xpcproxy\n')
+        with mock.patch.object(device_apps.remote, 'run', return_value=(0, ps)):
+            self.assertEqual(device_apps.suspended_pids(None, '/private/var/containers/Bundle/Application/U/X.app/'),
+                             [10, 11])
 
 
 class ErrorClassificationTests(unittest.TestCase):
@@ -407,6 +670,7 @@ class FakeSSH:
         return self
 
     def exec_command(self, command, timeout=None):
+        self.commands = getattr(self, 'commands', []) + [command]
         if 'tar ' in command:
             return None, self, io.BytesIO()
         return None
@@ -459,6 +723,21 @@ class ExtractTests(unittest.TestCase):
                 self.assertEqual(ipa.read('Payload/X.app/Current'), b'X')  # symlink target
                 self.assertEqual(ipa.getinfo('Payload/X.app/X').external_attr >> 16 & 0o777, 0o755)
             self.assertEqual(os.listdir(folder), ['x.ipa'])
+
+    def test_direct_method_leaves_out_purchase_metadata(self):
+        import ipa_extract
+        import zipfile
+        for metadata in (True, False):
+            client = FakeSSH(self.tar())
+            with tempfile.TemporaryDirectory() as folder:
+                dest = os.path.join(folder, 'x.ipa')
+                ipa_extract.extract_ipa(client, '/var/containers/Bundle/Application/U/X.app', dest,
+                                        metadata=metadata)
+                with zipfile.ZipFile(dest) as ipa:
+                    self.assertEqual(ipa.read('Payload/X.app/X'), b'exe')
+            # The device lists iTunesMetadata.plist (see FakeSSH.makefile); only tar decides what is copied.
+            tar = next(command for command in client.commands if 'tar ' in command)
+            self.assertEqual('iTunesMetadata.plist' in tar, metadata, tar)
 
     def test_hard_links_are_not_dropped_silently(self):
         import ipa_extract

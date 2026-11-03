@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Replace still-encrypted files of a decrypted IPA with copies decrypted on the device (R2).
+"""Replace still-encrypted files of an IPA with copies decrypted on the device.
 
-The device side runs in repair_worker.py (child process with the matching frida); this module
-plans which ranges to decrypt and writes the results back into the IPA. It never loads frida.
+Used to finish frida-ios-dump IPAs (R2) and to decrypt a copied bundle without launching the
+app (R4). The device side runs in repair_worker.py (child process with the matching frida); this
+module plans which ranges to decrypt and writes the results back into the IPA. It never loads frida.
 """
 
 import os
+import plistlib
 import posixpath
+import re
 import shutil
 import struct
 import zipfile
@@ -14,22 +17,34 @@ import zipfile
 import ipa_verify
 
 CHUNK = 1024 * 1024
+STALLED = 'no response from the device for {} s'
+# Errors after which frida-server was gone rather than the file undecryptable.
+# Any frida TransportError (closed, reset, aborted, timed out: worded differently on each OS) is one.
+CONNECTION_ERRORS = ('transporterror', 'connection is closed', 'connection was forcibly closed', 'connection reset',
+                     'connection was aborted', 'lost the connection', 'unable to connect', 'connection refused',
+                     'timeout was reached', STALLED.split('{')[0])
 
 
 class Job:
     """One still-encrypted file: its IPA member, its path on the device and the slices to decrypt."""
 
-    def __init__(self, index, member, device_path, slices):
+    def __init__(self, index, member, device_path, slices, kind='other', extension=None, min_os=''):
         self.id = str(index)
         self.member = member
         self.device_path = device_path
         self.slices = slices  # ipa_verify.Slice, encrypted ones only
+        self.kind = kind      # main, appex, framework, watch or other (see kind())
+        self.extension = extension  # bundle ID of the app extension whose executable this is
+        self.min_os = min_os        # MinimumOSVersion of the bundle the file belongs to
         self.error = None     # why the file was not repaired, once known
         self.done = set()     # indexes of decrypted slices
         self.slice_errors = {}  # index -> error text from the device
 
     def to_json(self):
-        return dict(id=self.id, path=self.device_path,
+        # suffix finds the image in a process, whichever form (/var or /private/var) the path takes there.
+        app_dir = '/' + self.member.split('/')[1]
+        return dict(id=self.id, path=self.device_path, kind=self.kind, extension=self.extension,
+                    suffix=app_dir + '/' + ipa_verify.short_name(self.member),
                     slices=[dict(offset=s.offset, cryptoff=s.cryptoff, cryptsize=s.cryptsize, cryptid=s.cryptid,
                                  cpu=s.cpu, subtype=s.subtype) for s in self.slices])
 
@@ -37,9 +52,70 @@ class Job:
     def repaired(self):
         return self.error is None and len(self.done) == len(self.slices)
 
+    def untried(self):
+        """Whether some slice has neither been decrypted nor failed."""
+        return len(self.done) + len(self.slice_errors) < len(self.slices)
 
-def plan(result, app_path):
-    """Jobs for every encrypted file in an ipa_verify.Result; app_path is the .app on the device."""
+    def connection_lost(self):
+        texts = list(self.slice_errors.values()) + ([self.error[1]] if self.error else [])
+        return any(needle in text.lower() for text in texts for needle in CONNECTION_ERRORS)
+
+    def reset(self):
+        """Forget the failures (not the decrypted slices) before trying again."""
+        self.error = None
+        self.slice_errors = {}
+
+
+def version_tuple(version):
+    """(16, 1, 2) for '16.1.2' or 'iPhone OS 16.1.2'; () when there is no version."""
+    match = re.search(r'(\d+(?:\.\d+)*)\s*$', version or '')
+    return tuple(int(part) for part in match.group(1).split('.')) if match else ()
+
+
+def kind(inner, executables):
+    """What a file inside the .app is: main (the app's executable), appex (an app extension's
+    executable), framework (framework or dylib), watch (anything in the Watch app) or other.
+    executables maps bundle folders inside the .app ('' for the app itself) to their executable."""
+    if inner.startswith('Watch/'):
+        return 'watch'
+    # Before the executables: a framework's Info.plist names its executable too.
+    if '.framework/' in inner or inner.endswith('.dylib'):
+        return 'framework'
+    folder, name = posixpath.split(inner)
+    if executables.get(folder) == name:
+        return 'main' if folder == '' else ('appex' if folder.endswith('.appex') else 'other')
+    return 'other'
+
+
+def _bundles(archive, app_prefix):
+    """{folder inside the .app: (CFBundleExecutable, CFBundleIdentifier, MinimumOSVersion)} from the IPA's
+    Info.plists."""
+    bundles = {}
+    for name in archive.namelist():
+        if not (name.startswith(app_prefix) and name.endswith('/Info.plist') or name == app_prefix + 'Info.plist'):
+            continue
+        folder = posixpath.dirname(name[len(app_prefix):])
+        if folder and not folder.endswith(('.appex', '.app', '.framework')):
+            continue
+        try:
+            info = plistlib.loads(archive.read(name))
+        except Exception:
+            continue
+        if isinstance(info, dict):
+            bundles[folder] = (info.get('CFBundleExecutable'), info.get('CFBundleIdentifier'),
+                               str(info.get('MinimumOSVersion') or ''))
+    return bundles
+
+
+def plan(result, app_path, archive_path=None):
+    """Jobs for every encrypted file in an ipa_verify.Result; app_path is the .app on the device.
+    archive_path (the IPA) tells executables apart from other Mach-O files."""
+    bundles = {}
+    if archive_path and result.files:
+        app_prefix = '/'.join(result.files[0].name.split('/')[:2]) + '/'
+        with zipfile.ZipFile(archive_path) as archive:
+            bundles = _bundles(archive, app_prefix)
+    executables = {folder: executable for folder, (executable, _, _) in bundles.items()}
     jobs = []
     for file_result in result.encrypted:
         if file_result.error:
@@ -48,7 +124,10 @@ def plan(result, app_path):
         if inner == file_result.name:
             continue  # outside Payload/X.app (e.g. iTunesMetadata): not part of the installed bundle
         slices = [s for s in file_result.slices if s.encrypted]
-        jobs.append(Job(len(jobs), file_result.name, posixpath.join(app_path.rstrip('/'), inner), slices))
+        what = kind(inner, executables)
+        _, identifier, min_os = bundles.get(posixpath.dirname(inner), (None, None, ''))
+        jobs.append(Job(len(jobs), file_result.name, posixpath.join(app_path.rstrip('/'), inner), slices,
+                        what, identifier if what == 'appex' else None, min_os))
     return jobs
 
 

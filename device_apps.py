@@ -122,10 +122,31 @@ def _running(client):
     return result
 
 
+def _bundle_prefixes(app_path):
+    app_path = app_path.rstrip('/')
+    return app_path + '/', app_path.replace('/private/var/', '/var/', 1) + '/'
+
+
 def running_pid(client, app_path):
-    """PID of the app whose bundle is at app_path, or 0 when it is not running."""
-    prefix = app_path.rstrip('/') + '/'
-    return next((pid for pid, command in _running(client) if command.startswith(prefix)), 0)
+    """PID of the app whose bundle is at app_path, or 0 when it is not running.
+    Only the app's own executable counts, not its extensions (PlugIns/X.appex/X), which the system
+    keeps running on its own (a VPN tunnel, for one)."""
+    for pid, command in _running(client):
+        for prefix in _bundle_prefixes(app_path):
+            if command.startswith(prefix) and '/' not in command[len(prefix):]:
+                return pid
+    return 0
+
+
+def suspended_pids(client, app_path):
+    """PIDs of stopped processes (state T) running code from the app's bundle, its extensions included."""
+    prefixes = _bundle_prefixes(app_path)
+    result = []
+    for line in remote.run(client, 'ps -A -o pid=,stat=,comm=')[1].splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].startswith('T') and parts[2].startswith(prefixes):
+            result.append(int(parts[0]))
+    return result
 
 
 class _SFTPPool:

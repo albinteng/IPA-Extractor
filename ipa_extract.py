@@ -65,10 +65,12 @@ def _date_time(mtime):
     return t[:6]
 
 
-def extract_ipa(client, app_path, dest, progress=None, cancelled=None):
+def extract_ipa(client, app_path, dest, progress=None, cancelled=None, metadata=True):
     """Write the bundle at app_path (…/Bundle/Application/<UUID>/X.app) to dest as an IPA.
 
     progress(done_bytes, total_bytes) is called while streaming; cancelled() aborts with Cancelled.
+    metadata False leaves out iTunesMetadata.plist (it names the purchasing Apple ID) and iTunesArtwork,
+    as decrypted IPAs do.
     """
     progress = progress or (lambda done, total: None)
     cancelled = cancelled or (lambda: False)
@@ -78,7 +80,7 @@ def extract_ipa(client, app_path, dest, progress=None, cancelled=None):
     _, output = remote.run(client, 'cd {} && ls -d {} 2>/dev/null; du -sk {}'.format(
         q(container), ' '.join(q(n) for n in METADATA_FILES), q(app_dir)), timeout=60)
     for line in output.splitlines():
-        if line.strip() in METADATA_FILES:
+        if metadata and line.strip() in METADATA_FILES:
             names.append(line.strip())
     try:
         total = int(output.splitlines()[-1].split()[0]) * 1024
