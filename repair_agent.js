@@ -6,7 +6,8 @@
 //
 // iOS 16 and later refuse that, so the system loads the code instead and it is read from memory:
 // imageBase/readAt read the decrypted image of a process (an app spawned suspended, or an app
-// extension started with launchExtension and caught suspended by spawn gating).
+// extension started with launchExtension and caught suspended by spawn gating). Frameworks are
+// loaded with loadImage into the app, once hookAppMain has let it start without its UI.
 //
 // Works with Frida 16 and 17 and needs no Objective-C bridge.
 
@@ -22,6 +23,14 @@ function exported(name) {
     return Module.getGlobalExportByName(name); // Frida 17
   }
   return Module.getExportByName(null, name); // Frida 16
+}
+
+function moduleExport(module, name) {
+  if (typeof Module.findExportByName === 'function') {
+    return Module.findExportByName(module, name); // Frida 16
+  }
+  const found = Process.findModuleByName(module); // Frida 17
+  return found === null ? null : found.findExportByName(name);
 }
 
 const open = new SystemFunction(exported('open'), 'int', ['pointer', 'int']);
@@ -124,6 +133,28 @@ rpc.exports = {
 
   readAt(base, offset, size) {
     return ptr(base).add(offset).readByteArray(size);
+  },
+
+  // iOS 16 and later decrypt a framework only when it is loaded, and loading needs the app to be
+  // past dyld's setup. Called before an app spawned suspended is resumed: UIApplicationMain is
+  // replaced by a bare run loop, so the app never brings up its UI (its initializers still run).
+  hookAppMain() {
+    const runLoop = moduleExport('CoreFoundation', 'CFRunLoopRun');
+    let hooked = false;
+    for (const module of ['UIKitCore', 'UIKit']) {
+      const main = moduleExport(module, 'UIApplicationMain');
+      if (main !== null && runLoop !== null) {
+        Interceptor.replace(main, runLoop);
+        hooked = true;
+        break;
+      }
+    }
+    return hooked;
+  },
+
+  // Load a framework or dylib (dlopen) so the system decrypts it; imageBase() then finds it.
+  loadImage(path) {
+    return Module.load(path).base.toString();
   },
 
   // Ask the system to start an app extension, as a host does when it uses one. The caller has

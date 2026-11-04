@@ -340,7 +340,7 @@ class DecryptMethodTests(unittest.TestCase):
 
     def test_repair_failures(self):
         import ipa_extractor
-        self.assertEqual(ipa_extractor.repair_failure('unsupported:framework'), ('repair_unsupported_framework', ''))
+        self.assertEqual(ipa_extractor.repair_failure('unsupported:watch'), ('repair_unsupported_watch', ''))
         self.assertEqual(ipa_extractor.repair_failure('mremap_encrypted failed: Cannot allocate memory (errno 12)')[0],
                          'repair_nokey')
         self.assertEqual(ipa_extractor.repair_failure('TransportError: timeout')[0], 'repair_failed')
@@ -523,6 +523,42 @@ class RepairWorkerHelperTests(unittest.TestCase):
             worker.extension({'id': '1', 'slices': [{}], 'extension': 'com.x.b'})
         self.assertEqual(asked, ['spawn:com.apple.Preferences'])  # the host that worked first, the hung one dropped
         self.assertEqual(worker.host_order, ['spawn:com.apple.Preferences', 'SpringBoard', 'app'])
+
+    def test_frameworks_let_the_app_start_once_then_load_each(self):
+        from unittest import mock
+        worker = self.worker.Worker.__new__(self.worker.Worker)
+        worker.app_running, worker.app_pid = False, 7
+        worker.device = mock.Mock()
+        api = mock.Mock()
+        api.hook_app_main.return_value = True
+        api.load_image.side_effect = [RuntimeError('dyld busy'), '0x1000', '0x2000']  # first try too early
+        worker.app = lambda: api
+        worker.read_image = mock.Mock()
+        jobs = [{'id': str(i), 'path': '/a/X.app/Frameworks/F%d.framework/F%d' % (i, i), 'slices': [{}]} for i in range(2)]
+        events = []
+        with mock.patch.object(self.worker, 'emit', side_effect=lambda kind, **data: events.append(kind)), \
+                mock.patch.object(self.worker.time, 'sleep'):
+            worker.frameworks(jobs)
+        api.hook_app_main.assert_called_once()
+        worker.device.resume.assert_called_once_with(7)  # before any framework is loaded
+        self.assertIn('running_app', events)               # the GUI logs that the app's code runs
+        self.assertEqual(api.load_image.call_count, 3)
+        self.assertEqual(worker.read_image.call_count, 2)
+
+    def test_frameworks_never_resume_an_app_whose_ui_cannot_be_stopped(self):
+        from unittest import mock
+        worker = self.worker.Worker.__new__(self.worker.Worker)
+        worker.app_running, worker.app_pid = False, 7
+        worker.device = mock.Mock()
+        api = mock.Mock()
+        api.hook_app_main.return_value = False
+        worker.app = lambda: api
+        failed = []
+        worker.fail_all = lambda job, error: failed.append((job['id'], error))
+        with mock.patch.object(self.worker, 'emit'):
+            worker.frameworks([{'id': '0', 'path': '/a/F', 'slices': [{}]}])
+        worker.device.resume.assert_not_called()
+        self.assertEqual(failed, [('0', 'RuntimeError: UIApplicationMain not found in the app')])
 
     def test_alive_is_throttled(self):
         from unittest import mock

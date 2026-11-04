@@ -2026,6 +2026,9 @@ class DumpGUI(tk.Tk):
                             job.error = ('frida', event['error'])
                 elif event['type'] == 'spawned':
                     options.setdefault('repair_pids', []).append(event['pid'])  # left suspended; closed later
+                elif event['type'] == 'running_app':
+                    # iOS 16+ frameworks: unlike everything else, this lets the app's own code run.
+                    self.post(self.log, Text('log_repair_run_app', bundle=bundle))
                 elif event['type'] == 'log':
                     self.post(self.log, '[{}] {}'.format(bundle, event['text']))
             code = process.wait()

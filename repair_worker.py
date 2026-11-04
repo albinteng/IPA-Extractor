@@ -12,6 +12,8 @@ Usage: repair_worker.py HOST:PORT JOBS.json OUTDIR --method mremap|memory --bund
   memory  iOS 16 and later: the system loads the code and it is read from memory. The main
           executable comes from the app spawned suspended; app extensions are started through
           NSExtension from a system process and stopped by spawn gating before they run.
+          Frameworks come last: the app is let start without its UI (its initializers run) and
+          each one is loaded into it.
           --pid reuses the running app, which then also looks extensions up; --no-launch says the
           app must not run (finishing a direct decryption rather than a dump).
 
@@ -20,10 +22,11 @@ JOBS.json: [{"id": "0", "path": "/path/on/device/X.app/PlugIns/E.appex/E", "suff
              "slices": [{"offset", "cryptoff", "cryptsize", "cryptid", "cpu", "subtype"}]}]
 For every slice that is decrypted, OUTDIR/<id>_<slice index>.bin holds the decrypted range.
 Prints JSON lines prefixed with @@: {"type": "slice", "id", "index", "ok", "error"},
-{"type": "spawned", "pid"} for processes it left to be closed, {"type": "log", "text"},
+{"type": "spawned", "pid"} for processes it left to be closed, {"type": "running_app"} when the
+app is let run its initializers (for frameworks), {"type": "log", "text"},
 {"type": "alive"} while a long step makes progress, and {"type": "error", "error"} when nothing
 can be done. Errors starting with "unsupported:" name a
-file or slice the method cannot handle (framework, watch, other, slice, extension).
+file or slice the method cannot handle (watch, other, slice, extension).
 """
 
 import argparse
@@ -41,6 +44,7 @@ PREFIX = '@@'
 # itself comes last: asked while it runs, it often does not answer until Frida times out.
 EXTENSION_HOSTS = ('SpringBoard', 'AuthenticationServicesAgent', 'spawn:com.apple.Preferences', 'app')
 GATE_TIMEOUT = 15
+LOAD_ATTEMPTS = 5  # a framework that does not load at once is tried again, a second apart
 ALIVE_EVERY = 10  # seconds between "alive" events, so the GUI can tell slow from stuck
 _last_emit = [0.0]
 
@@ -182,6 +186,7 @@ class Worker:
                     self.result(job, index, str(error), target)
 
     def run_memory(self, jobs):
+        frameworks = []
         for job in jobs:
             if job['kind'] == 'main':
                 try:
@@ -190,8 +195,43 @@ class Worker:
                     self.fail_all(job, describe(error))
             elif job['kind'] == 'appex' and job.get('extension'):
                 self.extension(job)
+            elif job['kind'] == 'framework':
+                frameworks.append(job)  # last: the app has to run for them
             else:
                 self.fail_all(job, 'unsupported:' + job['kind'])
+        if frameworks:
+            self.frameworks(frameworks)
+
+    def frameworks(self, jobs):
+        """Frameworks are decrypted only when loaded, which needs the app past dyld's setup. An app
+        that is not running already is let start with UIApplicationMain replaced: it never shows its
+        UI, but its initializers run (so this comes after everything that needs no code to run)."""
+        try:
+            api = self.app()
+            if not self.app_running:
+                if not api.hook_app_main():
+                    raise RuntimeError('UIApplicationMain not found in the app')
+                emit('running_app')
+                self.device.resume(self.app_pid)
+                self.app_running = True
+        except Exception as error:
+            for job in jobs:
+                self.fail_all(job, describe(error))
+            return
+        for job in jobs:
+            alive()
+            try:
+                for attempt in range(LOAD_ATTEMPTS):
+                    try:
+                        api.load_image(job['path'])
+                        break
+                    except Exception:
+                        if attempt == LOAD_ATTEMPTS - 1:
+                            raise
+                        time.sleep(1)  # dyld may still be setting the app up
+                self.read_image(api, job)
+            except Exception as error:
+                self.fail_all(job, describe(error))
 
     def host(self, name):
         """Agent in an extension host, injected once."""
