@@ -1105,15 +1105,27 @@ class DumpGUI(tk.Tk):
     def _connect_worker(self, generation, host, port, user, password):
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        try:
-            self.post(self.log, Text('log_ssh_connecting', user=user, host=host, port=port))
-            client.connect(host, port, user, password, timeout=10, banner_timeout=15,
-                           auth_timeout=15, look_for_keys=False, allow_agent=False)
-            client.get_transport().set_keepalive(10)
-        except Exception as error:
-            client.close()
-            self.post(self._connect_failed, generation, error)
-            return
+        self.post(self.log, Text('log_ssh_connecting', user=user, host=host, port=port))
+        for attempt in (1, 2):
+            try:
+                client.connect(host, port, user, password, timeout=10, banner_timeout=15,
+                               auth_timeout=15, look_for_keys=False, allow_agent=False)
+                client.get_transport().set_keepalive(10)
+                break
+            except paramiko.AuthenticationException as error:  # a wrong password will not get better
+                client.close()
+                self.post(self._connect_failed, generation, error)
+                return
+            except Exception as error:
+                # A device on Wi-Fi sometimes accepts the connection but sends no SSH banner: try once more.
+                client.close()
+                if attempt == 2:
+                    self.post(self._connect_failed, generation, error)
+                    return
+                self.post(self.log, Text('log_ssh_retry', error=error))
+                time.sleep(2)
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.post(self._ssh_connected, generation, client, host)
 
     def _connect_failed(self, generation, error):
@@ -1254,6 +1266,18 @@ class DumpGUI(tk.Tk):
         self.set_frida_state(Text('state_unused'), 'idle')
         self.btn_connect.configure(state='normal', text=self.t('connect'))
         self.log(Text('log_disconnected', reason=Text(reason)))
+
+    def ssh_alive(self):
+        """True while the SSH session a running batch depends on is usable."""
+        client = self.ssh
+        transport = client.get_transport() if client is not None else None
+        return transport is not None and transport.is_active()
+
+    def _abort_lost(self, jobs, index):
+        """Mark the jobs from index on as skipped after SSH was lost; the batch stops."""
+        self.post(self.log, Text('log_batch_ssh_lost', n=len(jobs) - index))
+        for bundle, _ in jobs[index:]:
+            self.post(self.set_status, bundle, Text('st_skipped_lost'), 'failed')
 
     def _watch_connection(self):
         transport = self.ssh.get_transport() if self.ssh is not None else None
@@ -1727,6 +1751,9 @@ class DumpGUI(tk.Tk):
         succeeded = 0
         try:
             for index, (bundle, name) in enumerate(jobs):
+                if not self.ssh_alive():
+                    self._abort_lost(jobs, index)
+                    break
                 if self._extract_one(index, len(jobs), bundle, name, outdir):
                     succeeded += 1
         except Exception as error:  # keep the UI usable whatever happens
@@ -1798,19 +1825,23 @@ class DumpGUI(tk.Tk):
             if paused:
                 self.post(self.set_status, bundle, Text('st_skipped'), 'failed')
                 continue
+            if not self.ssh_alive():
+                self._abort_lost(jobs, index)
+                break
             for attempt in (1, 2):
                 if options['direct']:
                     # Only SSH is involved: a copy that broke off (Wi-Fi, a stalled channel) is tried once more.
                     ok, message = self._copy_bundle(index, total, bundle, name, options)
                     kind = None
-                    if ok or self.cancel_requested.is_set() or attempt == 2:
+                    if ok or self.cancel_requested.is_set() or attempt == 2 or not self.ssh_alive():
                         break
                     self.post(self.log, Text('log_failed', bundle=bundle, msg=message))
                     self.post(self.log, Text('log_retry', bundle=bundle))
                     continue
                 ok, message = self._dump_one(index, total, bundle, name, options)
                 kind = None if ok else classify_error(message)
-                if ok or self.cancel_requested.is_set() or attempt == 2 or kind not in RETRY_ERRORS:
+                if (ok or self.cancel_requested.is_set() or attempt == 2 or kind not in RETRY_ERRORS
+                        or not self.ssh_alive()):
                     break
                 if (kind in RESTART_ERRORS and options['restart_frida']
                         and not self._restart_frida_server(options, bundle)):
@@ -1857,6 +1888,8 @@ class DumpGUI(tk.Tk):
             result = ipa_verify.verify_ipa(path)
             if result.encrypted and options['repair'] and not self.cancel_requested.is_set():
                 failures = self._repair(bundle, path, result, options, pid)
+                if not self.ssh_alive():
+                    self.post(self.log, Text('log_conn_lost_partial', bundle=bundle))
                 result = ipa_verify.verify_ipa(path)
             status = result.status
         except Exception as error:  # not a readable zip: dump.py wrote a broken IPA
