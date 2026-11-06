@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Vérifié : {n} fichiers Mach-O sur {total} sont encore chiffrés ({status}) :",
   "log_verify_failed": "[{bundle}] Impossible de vérifier l'IPA : {error}",
   "check_partial": "Cocher les partiellement déchiffrées",
-  "check_partial_tip": "Coche les apps dont l'IPA déchiffré contient encore des fichiers chiffrés : vérifiées pendant cette session, ou trouvées dans le dossier de sortie sous un nom de fichier partial-decrypted / partial-64bit-decrypted (nécessite {{type}} dans le nom de fichier).",
+  "check_partial_tip": "Coche les apps dont l'IPA déchiffré contient encore des fichiers chiffrés : vérifiées pendant cette session, ou trouvées dans le dossier de sortie sous un nom de fichier partial-decrypted… (nécessite {{type}} dans le nom de fichier).",
   "st_done_partial32": "✔ Extrait (déchiffré ; seules les slices 32 bits restent chiffrées)",
   "st_partial": "⚠ Partiellement déchiffré : {n} fichier(s) encore chiffré(s)",
   "verify_error": "impossible de lire l'IPA : {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "aucun processus système n'a pu démarrer cette extension d'app",
   "log_repair_retry": "[{bundle}] {n} fichier(s) en échec à cause de frida-server ; redémarrage et nouvelle tentative…",
   "log_repair_run_app": "[{bundle}] Lancement de l'app sans son interface pour déchiffrer ses frameworks (cela exécute le code d'initialisation de l'app)…",
-  "reason_repair_unsupported_minos": "il nécessite iOS {error} : cet appareil ne le charge donc jamais et il ne peut pas être déchiffré ici"
+  "reason_repair_unsupported_minos": "il nécessite iOS {error} : cet appareil ne le charge donc jamais et il ne peut pas être déchiffré ici",
+  "log_ssh_legacy": "Cet appareil n'offre qu'une ancienne clé d'hôte SSH (ssh-rsa) ; elle est autorisée et une nouvelle tentative est faite…",
+  "log_ssh_retry": "Échec de la connexion SSH ({error}) ; nouvelle tentative…",
+  "st_skipped_lost": "Ignorée (connexion perdue)",
+  "log_batch_ssh_lost": "Connexion SSH perdue : le lot s'est arrêté, {n} app(s) non traitée(s). Reconnectez-vous et sélectionnez-les à nouveau.",
+  "log_conn_lost_partial": "[{bundle}] La connexion SSH a été perdue pendant le déchiffrement : les fichiers encore chiffrés sont dus à la connexion perdue, pas à l'appareil. Reconnectez-vous et extrayez à nouveau cette app.",
+  "m_dump_old_frida": "Le mode frida-ios-dump nécessite frida 16 ou plus récent, mais cet appareil utilise frida {version}.\n\nChoisissez le mode de déchiffrement direct dans Réglages → Frida.",
+  "reason_repair_oldslice": "c'est la tranche d'un processeur plus ancien, que cet appareil n'exécute jamais ; la tranche qu'il exécute a été déchiffrée, l'app fonctionne donc toujours ici ({error})",
+  "reason_repair_nomem": "l'appareil a refusé de le déchiffrer ({error})",
+  "tree_loading": "Chargement de la liste des apps…"
 }

@@ -18,6 +18,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('address')
     parser.add_argument('--wait', type=float, default=0)
+    parser.add_argument('--deep', action='store_true',
+                        help="also load a script into frida-server itself, as the decryption does")
     args = parser.parse_args()
     try:
         import frida
@@ -33,8 +35,14 @@ def main():
             except Exception:
                 pass
             device = manager.add_remote_device(args.address)
-            parameters = device.query_system_parameters()
-            os_info = parameters.get('os') or {}
+            # frida 12 cannot tell the device's OS: the GUI then asks over SSH.
+            if args.deep:
+                # A frida-server can answer attach(0) yet never run a script (after it hit a kernel bug).
+                session = device.attach(0)
+                session.create_script('rpc.exports = { ping: function () { return 1; } };').load()
+                session.detach()
+            query = getattr(device, 'query_system_parameters', None)
+            os_info = (query().get('os') or {}) if query else {}
             print(json.dumps({'ok': True, 'frida': frida.__version__,
                               'os': '{} {}'.format(os_info.get('name', ''), os_info.get('version', '')).strip()}))
             return 0

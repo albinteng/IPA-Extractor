@@ -126,7 +126,7 @@
   "field_version": "版本",
   "field_build": "Build",
   "field_type": "类型",
-  "name_help": "“类型”：砸壳 IPA 按所有可执行文件的验证结果为 decrypted、partial-64bit-decrypted（只剩 32 位 slice 加密）或 partial-decrypted；原始 IPA 为 encrypted（可执行文件本来就未加密时为 original）。无需输入 .ipa；版本为空时以 unknown 代替。",
+  "name_help": "“类型”：砸壳 IPA 按所有可执行文件的验证结果为 decrypted、partial-decrypted-架构（主程序已解密的架构，如 partial-decrypted-armv7）或 partial-decrypted；原始 IPA 为 encrypted（可执行文件本来就未加密时为 original）。无需输入 .ipa；版本为空时以 unknown 代替。",
   "name_preview": "预览：{file}",
   "name_reset": "恢复默认",
   "name_bad": "格式错误：{error}",
@@ -255,7 +255,7 @@
   "log_verify_partial": "[{bundle}] 验证：{total} 个 Mach-O 中有 {n} 个仍加密（{status}）：",
   "log_verify_failed": "[{bundle}] 无法验证 IPA：{error}",
   "check_partial": "勾选砸壳不完整的 App",
-  "check_partial_tip": "勾选砸壳 IPA 仍有加密文件的 App：本次验证过的，或输出文件夹中文件名是 partial-decrypted／partial-64bit-decrypted 的（文件名设置要有 {{type}}）。",
+  "check_partial_tip": "勾选砸壳 IPA 仍有加密文件的 App：本次验证过的，或输出文件夹中文件名是 partial-decrypted… 的（文件名设置要有 {{type}}）。",
   "st_done_partial32": "✔ 已提取（砸壳；只剩 32 位 slice 加密）",
   "st_partial": "⚠ 砸壳不完整：{n} 个文件仍加密",
   "verify_error": "IPA 无法读取：{error}",
@@ -300,5 +300,14 @@
   "reason_repair_unsupported_extension": "没有系统进程能启动这个 App 扩展",
   "log_repair_retry": "[{bundle}] {n} 个文件因 frida-server 出错没有解密，重启 frida-server 后再试…",
   "log_repair_run_app": "[{bundle}] 为了解密 framework，让 App 启动但不显示界面（这一步会运行 App 的初始化代码）…",
-  "reason_repair_unsupported_minos": "它需要 iOS {error} 及以上，这台设备不会加载它，所以无法在这台设备上解密"
+  "reason_repair_unsupported_minos": "它需要 iOS {error} 及以上，这台设备不会加载它，所以无法在这台设备上解密",
+  "log_ssh_legacy": "此设备只提供旧式 SSH 主机密钥（ssh-rsa），已允许并重新连接…",
+  "log_ssh_retry": "SSH 连接失败（{error}），再试一次…",
+  "st_skipped_lost": "已跳过（连接中断）",
+  "log_batch_ssh_lost": "SSH 连接中断：批次已停止，{n} 个 App 未处理。请重新连接后再次选择。",
+  "log_conn_lost_partial": "[{bundle}] 解密时 SSH 连接中断：仍然加密的文件是连接中断造成的，不是设备的问题。请重新连接后再提取这个 App。",
+  "m_dump_old_frida": "frida-ios-dump 模式需要 frida 16 以上，但此设备使用的是 frida {version}。\n\n请到“设置 → Frida”改用“直接解密模式”。",
+  "reason_repair_oldslice": "这是给较旧 CPU 的切片，这台设备不会执行它；设备实际执行的切片已解密，所以 App 在这台上仍能用（{error}）",
+  "reason_repair_nomem": "设备拒绝解密这个文件（{error}）",
+  "tree_loading": "读取 App 列表中…"
 }

@@ -23,3 +23,27 @@ def run(client, command, timeout=15, stdin=None):
         return channel.recv_exit_status(), output
     finally:
         channel.close()
+
+
+def enable_legacy_host_key():
+    """Let paramiko verify ssh-rsa (SHA-1) host keys, the only kind iOS 8-era SSH servers offer.
+
+    paramiko 4 and later dropped it. It is added as the last choice, so a server that also offers
+    anything newer still gets that. True when it was enabled now, False when it already was.
+    """
+    import paramiko
+    from cryptography.hazmat.primitives import hashes
+
+    transport = paramiko.Transport
+    # These are paramiko internals: a version without them cannot be adapted.
+    if not hasattr(transport, '_key_info') or not hasattr(transport, '_preferred_keys'):
+        return False
+    if 'ssh-rsa' in transport._key_info:
+        return False
+
+    class LegacyRSAKey(paramiko.RSAKey):
+        HASHES = dict(paramiko.RSAKey.HASHES, **{'ssh-rsa': hashes.SHA1})
+
+    transport._key_info['ssh-rsa'] = LegacyRSAKey
+    transport._preferred_keys = tuple(transport._preferred_keys) + ('ssh-rsa',)
+    return True

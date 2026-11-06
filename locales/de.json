@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Geprüft: {n} von {total} Mach-O-Dateien sind noch verschlüsselt ({status}):",
   "log_verify_failed": "[{bundle}] Die IPA konnte nicht geprüft werden: {error}",
   "check_partial": "Teilweise entschlüsselte markieren",
-  "check_partial_tip": "Markiert Apps, deren entschlüsselte IPA noch verschlüsselte Dateien enthält: in dieser Sitzung geprüft oder im Ausgabeordner mit dem Dateinamen partial-decrypted / partial-64bit-decrypted gefunden (erfordert {{type}} im Dateinamen).",
+  "check_partial_tip": "Markiert Apps, deren entschlüsselte IPA noch verschlüsselte Dateien enthält: in dieser Sitzung geprüft oder im Ausgabeordner mit dem Dateinamen partial-decrypted… gefunden (erfordert {{type}} im Dateinamen).",
   "st_done_partial32": "✔ Extrahiert (entschlüsselt; nur 32-Bit-Slices noch verschlüsselt)",
   "st_partial": "⚠ Teilweise entschlüsselt: {n} Datei(en) noch verschlüsselt",
   "verify_error": "die IPA kann nicht gelesen werden: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "kein Systemprozess konnte diese App-Erweiterung starten",
   "log_repair_retry": "[{bundle}] {n} Datei(en) wegen frida-server fehlgeschlagen; er wird neu gestartet und es wird erneut versucht…",
   "log_repair_run_app": "[{bundle}] App wird ohne ihre Oberfläche gestartet, um ihre Frameworks zu entschlüsseln (dabei wird der Initialisierungscode der App ausgeführt)…",
-  "reason_repair_unsupported_minos": "sie erfordert iOS {error}, daher lädt dieses Gerät sie nie und sie kann hier nicht entschlüsselt werden"
+  "reason_repair_unsupported_minos": "sie erfordert iOS {error}, daher lädt dieses Gerät sie nie und sie kann hier nicht entschlüsselt werden",
+  "log_ssh_legacy": "Dieses Gerät bietet nur einen alten SSH-Hostschlüssel (ssh-rsa); er wird erlaubt und es wird erneut versucht…",
+  "log_ssh_retry": "SSH-Verbindung fehlgeschlagen ({error}); noch ein Versuch…",
+  "st_skipped_lost": "Übersprungen (Verbindung verloren)",
+  "log_batch_ssh_lost": "SSH-Verbindung verloren: Der Stapel wurde angehalten, {n} App(s) nicht verarbeitet. Neu verbinden und erneut auswählen.",
+  "log_conn_lost_partial": "[{bundle}] Die SSH-Verbindung ging beim Entschlüsseln verloren: Noch verschlüsselte Dateien liegen an der unterbrochenen Verbindung, nicht am Gerät. Neu verbinden und diese App erneut extrahieren.",
+  "m_dump_old_frida": "Der frida-ios-dump-Modus benötigt frida 16 oder neuer, aber dieses Gerät verwendet frida {version}.\n\nWähle in Einstellungen → Frida den Modus „Direkte Entschlüsselung“.",
+  "reason_repair_oldslice": "das ist das Slice für eine ältere CPU, die dieses Gerät nie ausführt; das ausgeführte Slice wurde entschlüsselt, die App funktioniert hier also weiterhin ({error})",
+  "reason_repair_nomem": "das Gerät hat die Entschlüsselung verweigert ({error})",
+  "tree_loading": "App-Liste wird geladen…"
 }

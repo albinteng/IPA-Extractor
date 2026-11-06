@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Doğrulandı: {total} Mach-O dosyasından {n} tanesi hâlâ şifreli ({status}):",
   "log_verify_failed": "[{bundle}] IPA doğrulanamadı: {error}",
   "check_partial": "Kısmen şifresi çözülmüşleri işaretle",
-  "check_partial_tip": "Şifresi çözülmüş IPA'sında hâlâ şifreli dosya bulunan uygulamaları işaretler: bu oturumda doğrulananlar veya çıktı klasöründe partial-decrypted / partial-64bit-decrypted dosya adıyla bulunanlar (dosya adında {{type}} gerekir).",
+  "check_partial_tip": "Şifresi çözülmüş IPA'sında hâlâ şifreli dosya bulunan uygulamaları işaretler: bu oturumda doğrulananlar veya çıktı klasöründe partial-decrypted… dosya adıyla bulunanlar (dosya adında {{type}} gerekir).",
   "st_done_partial32": "✔ Çıkarıldı (şifresi çözülmüş; yalnızca 32 bit dilimler hâlâ şifreli)",
   "st_partial": "⚠ Kısmen şifresi çözülmüş: {n} dosya hâlâ şifreli",
   "verify_error": "IPA okunamıyor: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "bu uygulama uzantısını hiçbir sistem işlemi başlatamadı",
   "log_repair_retry": "[{bundle}] {n} dosya frida-server nedeniyle başarısız oldu; frida-server yeniden başlatılıp tekrar deneniyor…",
   "log_repair_run_app": "[{bundle}] Framework'lerinin şifresini çözmek için uygulamanın arayüzü olmadan başlamasına izin veriliyor (bu, uygulamanın başlatma kodunu çalıştırır)…",
-  "reason_repair_unsupported_minos": "iOS {error} gerektirir, bu yüzden bu aygıt onu hiç yüklemez ve burada şifresi çözülemez"
+  "reason_repair_unsupported_minos": "iOS {error} gerektirir, bu yüzden bu aygıt onu hiç yüklemez ve burada şifresi çözülemez",
+  "log_ssh_legacy": "Bu cihaz yalnızca eski bir SSH ana makine anahtarı (ssh-rsa) sunuyor; izin verilip yeniden deneniyor…",
+  "log_ssh_retry": "SSH bağlantısı başarısız ({error}); bir kez daha deneniyor…",
+  "st_skipped_lost": "Atlandı (bağlantı kesildi)",
+  "log_batch_ssh_lost": "SSH bağlantısı kesildi: toplu işlem durdu, {n} uygulama işlenmedi. Yeniden bağlanıp tekrar seçin.",
+  "log_conn_lost_partial": "[{bundle}] Şifre çözme sırasında SSH bağlantısı kesildi: hâlâ şifreli olan dosyalar cihazdan değil, kesilen bağlantıdan kaynaklanıyor. Yeniden bağlanıp bu uygulamayı tekrar çıkarın.",
+  "m_dump_old_frida": "frida-ios-dump modu frida 16 veya üstünü gerektirir, ancak bu cihaz frida {version} kullanıyor.\n\nAyarlar → Frida bölümünde doğrudan şifre çözme modunu seçin.",
+  "reason_repair_oldslice": "bu, cihazın hiç çalıştırmadığı eski bir CPU'nun dilimi; çalıştırdığı dilimin şifresi çözüldü, bu yüzden uygulama burada çalışmaya devam eder ({error})",
+  "reason_repair_nomem": "cihaz şifresini çözmeyi reddetti ({error})",
+  "tree_loading": "Uygulama listesi yükleniyor…"
 }

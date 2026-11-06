@@ -25,7 +25,27 @@ MAX_FAT_ARCHS = 32  # 0xCAFEBABE also starts Java class files, whose next field 
 DECRYPTED = 'decrypted'
 PARTIAL_32BIT = 'partial-64bit-decrypted'  # only 32-bit slices of fat binaries with a decrypted arm64 slice
 PARTIAL = 'partial-decrypted'
+ARCH_ORDER = ('armv6', 'armv7', 'armv7s', 'arm64', 'arm64e')  # the order architectures appear in a type
 NO_MACHO = 'no-macho'
+
+
+def partial_type(archs):
+    """'partial-decrypted-armv6-armv7' for the architectures that are decrypted; PARTIAL when none or unknown ones."""
+    archs = set(archs)
+    if not archs or not archs <= set(ARCH_ORDER):
+        return PARTIAL
+    return 'partial-decrypted-' + '-'.join(a for a in ARCH_ORDER if a in archs)
+
+
+def all_types():
+    """Every type an IPA name can get, partial ones for every combination of architectures (and the
+    older 'partial-64bit-decrypted', so IPAs written by earlier versions are still found)."""
+    types = [DECRYPTED, PARTIAL, PARTIAL_32BIT]
+    for mask in range(1, 1 << len(ARCH_ORDER)):
+        name = partial_type(a for i, a in enumerate(ARCH_ORDER) if mask >> i & 1)
+        if name not in types:
+            types.append(name)
+    return tuple(types)
 
 
 class Slice:
@@ -168,6 +188,21 @@ class Result:
     def encrypted(self):
         """Files with at least one encrypted slice (or that could not be read)."""
         return [f for f in self.files if f.error or f.encrypted_archs]
+
+    @property
+    def main(self):
+        """The app's own executable (Payload/X.app/X), None when the IPA has none."""
+        return next((f for f in self.files if len(f.name.split('/')) == 3 and f.name.startswith('Payload/')), None)
+
+    @property
+    def type(self):
+        """Name of the result in file names: partial ones list the architectures of the main executable that
+        are decrypted."""
+        status = self.status
+        if status in (DECRYPTED, NO_MACHO):
+            return status
+        main = self.main
+        return partial_type(s.arch for s in main.slices if not s.encrypted) if main else PARTIAL
 
     @property
     def status(self):

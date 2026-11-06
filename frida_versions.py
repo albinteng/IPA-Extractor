@@ -6,14 +6,23 @@ A process can load only one frida, so the GUI never imports it: everything that 
 Frida runs in a child process whose PYTHONPATH points at the chosen version's folder.
 """
 
+import io
+import json
 import os
+import platform
 import re
 import shutil
 import sys
 import tempfile
+import urllib.request
+import zipfile
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 VERSION_RE = re.compile(r'\d+\.\d+\.\d+')
+LEGACY_BELOW = 14  # frida 14 is the first with abi3 wheels; older ones ship eggs for Python 2.7 and 3.8 only
+LEGACY_PYTHON = '3.8.10'
+LEGACY_PYTHON_URL = 'https://www.python.org/ftp/python/{0}/python-{0}-embed-amd64.zip'.format(LEGACY_PYTHON)
+PYPI_URL = 'https://pypi.org/pypi/frida/{}/json'
 COMPLETE = '.complete'  # written after pip succeeds, so a half-finished install is never used
 
 
@@ -79,12 +88,77 @@ def env(version, base=None, root=None):
     return result
 
 
+def python(version, root=None):
+    """Interpreter for a child process using this frida version.
+
+    A version whose Python bindings exist only for an older Python (frida 12 for 3.8) brings its own
+    interpreter in <version>/python; every other version runs with the tool's own Python.
+    """
+    for name in ('python.exe', os.path.join('bin', 'python3')):
+        path = os.path.join(folder(version, root), 'python', name)
+        if os.path.isfile(path):
+            return path
+    return sys.executable
+
+
 def staging(version, root=None):
     return folder(version, root) + '.partial'
 
 
+def is_legacy(version):
+    """Whether this frida has no wheel for current Pythons and needs its own Python 3.8."""
+    return int(major(version) or 0) < LEGACY_BELOW
+
+
+def legacy_supported():
+    """The embeddable Python 3.8 and the frida eggs used here exist for Windows x64 only."""
+    return sys.platform == 'win32' and platform.machine().lower() in ('amd64', 'x86_64')
+
+
+def egg_name(version):
+    return 'frida-{}-py3.8-win-amd64.egg'.format(version)
+
+
+def legacy_versions(releases):
+    """Legacy versions among PyPI's `releases` that have an egg for this computer."""
+    if not legacy_supported():
+        return []
+    return [v for v, files in releases.items() if re.fullmatch(r'\d+\.\d+\.\d+', v) and is_legacy(v)
+            and any(f['filename'] == egg_name(v) and not f.get('yanked') for f in files)]
+
+
+def install_legacy(version, log, root=None):
+    """Install an old frida into its staging folder: its Python 3.8 egg beside an embeddable Python 3.8.
+
+    log(text) reports progress. Raises on failure; finish_install() then moves it into place.
+    """
+    def download(url):
+        log('Downloading ' + url)
+        with urllib.request.urlopen(url, timeout=60) as response:
+            return response.read()
+
+    if not legacy_supported():
+        raise RuntimeError('frida {} needs Python 3.8, which this tool sets up on Windows x64 only'.format(version))
+    path = staging(version, root)
+    with urllib.request.urlopen(PYPI_URL.format(version), timeout=30) as response:
+        files = json.load(response)['urls']
+    egg = next((f for f in files if f['filename'] == egg_name(version)), None)
+    if egg is None:
+        raise RuntimeError('no {} on PyPI'.format(egg_name(version)))
+    with zipfile.ZipFile(io.BytesIO(download(egg['url']))) as archive:
+        archive.extractall(path, [n for n in archive.namelist() if not n.startswith('EGG-INFO/')])
+    python = os.path.join(path, 'python')
+    with zipfile.ZipFile(io.BytesIO(download(LEGACY_PYTHON_URL))) as archive:
+        archive.extractall(python)
+    # An embeddable Python ignores PYTHONPATH; its ._pth lists where to import from ('..' is the frida folder).
+    with open(os.path.join(python, 'python38._pth'), 'w') as handle:
+        handle.write('\n'.join(['python38.zip', '.', '..', 'import site', '']))
+
+
 def install_command(version, root=None):
     """pip command that installs frida==version into its staging folder (see finish_install)."""
+    if is_legacy(version):
+        return ['download', egg_name(version), 'and', 'Python', LEGACY_PYTHON, '(embeddable)']
     # --target cannot be combined with --user; the folder needs no administrator rights anyway.
     return [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location',
             '--target', staging(version, root), 'frida=={}'.format(version)]

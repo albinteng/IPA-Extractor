@@ -203,6 +203,15 @@ class VerifyTests(IpaMixin, unittest.TestCase):
         self.assertEqual(result.status, ipa_verify.DECRYPTED)
         self.assertEqual(len(result.files), 2)  # the PNG, plist and Java class file are not Mach-O
 
+    def test_partial_type_lists_decrypted_archs(self):
+        import ipa_verify
+        fat = fat_macho(self.ARMV7 + (thin_macho(*self.ARMV7, 0, is64=False),),
+                        self.ARM64 + (thin_macho(*self.ARM64, 1),))
+        result = self.verify({'X': fat})
+        self.assertEqual(result.type, 'partial-decrypted-armv7')
+        self.assertIn('partial-decrypted-armv6-armv7', ipa_verify.all_types())
+        self.assertEqual(ipa_verify.partial_type([]), ipa_verify.PARTIAL)
+
     def test_encrypted_extension_is_partial(self):
         import ipa_verify
         result = self.verify({'X': thin_macho(*self.ARM64, 0),
@@ -338,11 +347,19 @@ class DecryptMethodTests(unittest.TestCase):
         self.assertLess(ipa_repair.version_tuple('16.1'), ipa_repair.version_tuple('16.1.2'))
         self.assertEqual(ipa_repair.version_tuple(''), ())
 
+    def test_per_slice_copies_only_on_old_ios(self):
+        import ipa_extractor
+        copies = lambda ios, method='mremap': ipa_extractor.per_slice_copies(dict(ios=ios, method=method))
+        self.assertTrue(copies('iOS 8.1.1'))
+        self.assertFalse(copies('iPhone OS 12.4'))
+        self.assertFalse(copies(''))
+        self.assertFalse(copies('iOS 8.1.1', 'memory'))
+
     def test_repair_failures(self):
         import ipa_extractor
         self.assertEqual(ipa_extractor.repair_failure('unsupported:watch'), ('repair_unsupported_watch', ''))
         self.assertEqual(ipa_extractor.repair_failure('mremap_encrypted failed: Cannot allocate memory (errno 12)')[0],
-                         'repair_nokey')
+                         'repair_nomem')
         self.assertEqual(ipa_extractor.repair_failure('TransportError: timeout')[0], 'repair_failed')
 
 

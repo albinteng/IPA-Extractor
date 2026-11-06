@@ -2,16 +2,17 @@
 # -*- coding: utf-8 -*-
 """IPA Extractor: Tkinter GUI that pulls original or decrypted IPAs off a jailbroken device over SSH."""
 
-__version__ = '2.0'
+__version__ = '2.1'
 APP_NAME = 'IPA Extractor'
 
+import contextlib
 import importlib.util
 import json
 import os
 import platform
+import posixpath
 import queue
 import re
-import select
 import shlex
 import shutil
 import socket
@@ -23,6 +24,7 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import tkinter.font as tkfont
+import uuid
 
 try:
     import paramiko
@@ -126,7 +128,7 @@ MAX_CONSECUTIVE_FRIDA_ERRORS = 3
 # dump.py's own agent timeout is 120 s, so silence beyond this means the worker is hung.
 STALL_TIMEOUT = 150
 # {type} of a decrypted IPA follows its verification result.
-DUMP_KINDS = (ipa_verify.DECRYPTED, ipa_verify.PARTIAL_32BIT, ipa_verify.PARTIAL)
+DUMP_KINDS = ipa_verify.all_types()
 
 
 def pip_install(packages):
@@ -172,24 +174,32 @@ class SSHTunnel:
             threading.Thread(target=self._pipe, args=(client, channel), daemon=True).start()
 
     def _pipe(self, sock, channel):
-        try:
-            while not self.closed.is_set():
-                readable, _, _ = select.select([sock, channel], [], [], 1)
-                if sock in readable:
-                    data = sock.recv(65536)
+        """Copy both ways with one thread per direction. select() on a paramiko channel makes paramiko
+        build a socket pair per channel on Windows, which is where the SSH socket itself was seen failing."""
+        sock.settimeout(1)
+        channel.settimeout(1)
+
+        def copy(read, write):
+            try:
+                while not self.closed.is_set():
+                    try:
+                        data = read(65536)
+                    except socket.timeout:
+                        continue
                     if not data:
                         break
-                    channel.sendall(data)
-                if channel in readable:
-                    data = channel.recv(65536)
-                    if not data:
-                        break
-                    sock.sendall(data)
-        except Exception:
-            pass
-        finally:
-            sock.close()
-            channel.close()
+                    write(data)
+            except Exception:
+                pass
+            finally:
+                for end in (sock, channel):
+                    try:
+                        end.close()
+                    except Exception:
+                        pass
+
+        threading.Thread(target=copy, args=(channel.recv, sock.sendall), daemon=True).start()
+        copy(sock.recv, channel.sendall)
 
     def close(self):
         self.closed.set()
@@ -200,12 +210,14 @@ class SSHTunnel:
                 pass
 
 
-def probe_frida(version, address, wait=0):
+def probe_frida(version, address, wait=0, deep=False):
     """Ask frida_probe.py, running with frida `version`, whether frida-server at address answers.
 
+    deep also makes it run a script inside frida-server, which is what decrypting needs.
     Returns (ok, detail): detail is the device OS on success, the error otherwise.
     """
-    command = [sys.executable, '-u', PROBE, address] + (['--wait', str(wait)] if wait else [])
+    command = [frida_versions.python(version), '-u', PROBE, address] + (['--wait', str(wait)] if wait else []) \
+        + (['--deep'] if deep else [])
     try:
         process = subprocess.run(command, env=frida_versions.env(version), stdin=subprocess.DEVNULL,
                                  capture_output=True, text=True, encoding='utf-8', errors='replace',
@@ -262,13 +274,17 @@ def frida_releases():
         return any(platform_tag.search(w) and ('abi3' in w or python_tag in w) for w in wheels)
 
     versions = [v for v, files in releases.items() if re.fullmatch(r'\d+\.\d+\.\d+', v) and installable(files)]
+    versions += frida_versions.legacy_versions(releases)
     return sorted(versions, key=lambda v: tuple(int(n) for n in v.split('.')), reverse=True)
 
 
 def frida_server_status(client):
     """Return (frida-server version or None, whether it is running) on the device."""
+    # iOS 8 has no ps: launchctl then tells whether the frida-server job has a PID.
     _, found = remote.run(client, 'for p in {}; do [ -x "$p" ] && "$p" --version && break; done; '
-                                  'ps -A -o comm= | grep -c frida-server'.format(' '.join(FRIDA_SERVER_PATHS)))
+                                  '{{ ps -A -o comm= 2>/dev/null | grep frida-server; '
+                                  "launchctl list 2>/dev/null | grep -E '^[0-9]+[[:space:]].*frida'; }} "
+                                  '| grep -c .'.format(' '.join(FRIDA_SERVER_PATHS)))
     lines = [line.strip() for line in found.splitlines() if line.strip()]
     version = lines[0] if len(lines) > 1 and re.match(r'^\d+\.\d+', lines[0]) else None
     running = bool(lines) and lines[-1].isdigit() and int(lines[-1]) > 0
@@ -288,6 +304,13 @@ def decrypt_method(device_os):
     """How repair_worker.py decrypts on this device: mremap (iOS 15 and earlier) or memory."""
     major_version = ios_major(device_os)
     return 'memory' if major_version is not None and major_version >= MEMORY_FROM_IOS else 'mremap'
+
+
+def per_slice_copies(options):
+    """Whether each slice of a fat file needs a copy of its own: only iOS 8 and 9 were seen to set up decryption
+    for just the first cputype that asks (later systems keep working from the installed file)."""
+    major_version = ios_major(options.get('ios'))
+    return options['method'] == 'mremap' and major_version is not None and major_version < 10
 
 
 def dump_method_setting(value):
@@ -328,20 +351,30 @@ def gated_launches(ps_output, bundle=None):
     return kill, resume
 
 
-def repair_failure(error):
+def repair_failure(error, job=None):
     """(reason key, error) for a file repair_worker.py could not decrypt."""
     if error.startswith('unsupported:'):
         # iOS 16 and later: only what the system loads on this device can be read (see repair_worker.py).
         return 'repair_unsupported_' + error.split(':', 1)[1], ''
-    # The kernel has no key for the file: typically the app was not installed with this device's
-    # Apple ID (e.g. from an already decrypted or re-signed IPA).
-    if '(errno 12)' in error or '(errno 1)' in error:
+    if job is not None and '(errno 1)' in error:
+        # A 32-bit slice older than another slice of the same file that was decrypted: the device runs the
+        # newer one (an arm64 device prefers armv7s over armv7 over armv6) and the kernel refuses the older.
+        done = [job.slices[i] for i in job.done]
+        for index in job.slice_errors:
+            slice_ = job.slices[index]
+            if slice_.cpu == 12 and any(other.is_64bit or other.subtype > slice_.subtype for other in done):
+                return 'repair_oldslice', error
+    if '(errno 12)' in error:
+        return 'repair_nomem', error
+    # errno 1 with nothing else to explain it: the kernel has no key for the file, typically because the app
+    # was not installed with this device's Apple ID (e.g. from an already decrypted or re-signed IPA).
+    if '(errno 1)' in error:
         return 'repair_nokey', error
     return 'repair_failed', error
 
 
 def is_user_app(path):
-    return '/containers/Bundle/Application/' in (path or '')
+    return '/containers/bundle/application/' in (path or '').lower()
 
 
 def is_apple_app(bundle):
@@ -702,6 +735,10 @@ class DumpGUI(tk.Tk):
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        # Shown over the empty table while the app list is being read.
+        self.lbl_tree_busy = tk.Label(self.tree, text=self.t('tree_loading'), foreground='#57606a',
+                                     background=ttk.Style().lookup('Treeview', 'background') or 'white',
+                                     borderwidth=0)
         self.tree.tag_configure('checked', background='#ddf4ff')
         self.tree.tag_configure('done', foreground=COLORS['ok'])
         self.tree.tag_configure('failed', foreground=COLORS['error'])
@@ -1106,7 +1143,8 @@ class DumpGUI(tk.Tk):
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.post(self.log, Text('log_ssh_connecting', user=user, host=host, port=port))
-        for attempt in (1, 2):
+        retried = False
+        while True:
             try:
                 client.connect(host, port, user, password, timeout=10, banner_timeout=15,
                                auth_timeout=15, look_for_keys=False, allow_agent=False)
@@ -1117,13 +1155,24 @@ class DumpGUI(tk.Tk):
                 self.post(self._connect_failed, generation, error)
                 return
             except Exception as error:
-                # A device on Wi-Fi sometimes accepts the connection but sends no SSH banner: try once more.
+                # Wait for the failed transport's thread: it must not outlive the connection that replaces it.
+                failed = client.get_transport()
                 client.close()
-                if attempt == 2:
-                    self.post(self._connect_failed, generation, error)
-                    return
-                self.post(self.log, Text('log_ssh_retry', error=error))
-                time.sleep(2)
+                if failed is not None:
+                    failed.join(5)
+                # Old devices (iOS 8-era OpenSSH) offer only ssh-rsa host keys, which paramiko dropped.
+                legacy = (isinstance(error, paramiko.SSHException) and 'host key' in str(error)
+                          and remote.enable_legacy_host_key())
+                if legacy:
+                    self.post(self.log, Text('log_ssh_legacy'))
+                else:
+                    # A device on Wi-Fi sometimes accepts the connection but sends no SSH banner: try once more.
+                    if retried:
+                        self.post(self._connect_failed, generation, error)
+                        return
+                    retried = True
+                    self.post(self.log, Text('log_ssh_retry', error=error))
+                    time.sleep(2)
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.post(self._ssh_connected, generation, client, host)
@@ -1202,6 +1251,11 @@ class DumpGUI(tk.Tk):
             if tunnel is not None:
                 tunnel.close()
             return fail('state_failed', Text('log_frida_failed', error=detail))
+        if not detail:
+            try:
+                detail = 'iOS ' + remote.run(client, 'sw_vers -productVersion')[1].strip()
+            except Exception:
+                detail = ''
         self.post(self._frida_connected, generation, tunnel, version, detail, then)
 
     def _device_frida_found(self, generation, version):
@@ -1257,6 +1311,7 @@ class DumpGUI(tk.Tk):
         self.tunnel = self.frida_version = None
 
     def disconnect(self, reason):
+        self._set_tree_busy(False)
         self.generation += 1
         self._drop_frida()
         if self.ssh is not None:
@@ -1291,6 +1346,7 @@ class DumpGUI(tk.Tk):
             messagebox.showinfo(self.t('m_not_connected_t'), self.t('m_not_connected'))
             return
         self.log(Text('log_loading'))
+        self._set_tree_busy(True)
         self.run_background(self._load_apps_worker, self.generation, self.ssh)
 
     def _load_apps_worker(self, generation, client):
@@ -1298,6 +1354,7 @@ class DumpGUI(tk.Tk):
         try:
             apps = device_apps.list_apps(client)
         except Exception as error:
+            self.post(self._set_tree_busy, False)
             self.post(self.log, Text('log_load_failed', error=error))
             return
         self.post(self._apps_loaded, generation, apps)
@@ -1323,9 +1380,18 @@ class DumpGUI(tk.Tk):
             sftp.close()
         self.post(self._app_info_done, generation)
 
+    def _set_tree_busy(self, busy):
+        if self.root_frame is None:
+            return
+        if busy and not self.tree.get_children():
+            self.lbl_tree_busy.place(relx=0.5, rely=0.4, anchor='center')
+        else:
+            self.lbl_tree_busy.place_forget()
+
     def _apps_loaded(self, generation, apps):
         if generation != self.generation:
             return
+        self._set_tree_busy(False)
         for bundle, app in apps.items():
             previous = self.apps.get(bundle)
             if previous and previous.get('version') == app['version']:
@@ -1587,7 +1653,7 @@ class DumpGUI(tk.Tk):
                 self.t('d_data', path=app['data']),
             ]
             try:
-                verified = (app.get('verify') or {}).get('status')  # the name the last extraction got
+                verified = (app.get('verify') or {}).get('type')  # the name the last extraction got
                 lines.append(self.t('d_output', decrypted=self.ipa_name(app, 'dump', verified) + '.ipa',
                                     original=self.ipa_name(app, 'extract') + '.ipa'))
             except app_info.NameTemplateError:
@@ -1711,6 +1777,10 @@ class DumpGUI(tk.Tk):
             return
         if self.frida_version is None or self.tunnel is None:
             self.connect_frida(then=self.start_dump)
+            return
+        # frida-ios-dump compiles its agent with frida.Compiler (frida 16 and later).
+        if not direct and int(major(self.frida_version) or 0) < 16:
+            messagebox.showerror(self.t('m_frida_t'), self.t('m_dump_old_frida', version=self.frida_version))
             return
         # A decrypted IPA is named after its verification result, so any of these may be written.
         names = {bundle: {kind: self.ipa_name(self.apps[bundle], 'dump', kind) for kind in DUMP_KINDS}
@@ -1900,7 +1970,7 @@ class DumpGUI(tk.Tk):
             self.post(self.set_status, bundle, Text('st_failed', msg=Text('verify_no_macho')), 'failed')
             self.post(self.log, Text('log_failed', bundle=bundle, msg=Text('verify_no_macho')))
             return False
-        final = os.path.join(options['outdir'], options['names'][bundle][status] + '.ipa')
+        final = os.path.join(options['outdir'], options['names'][bundle][result.type] + '.ipa')
         if final != path:
             try:
                 os.replace(path, final)
@@ -1919,7 +1989,7 @@ class DumpGUI(tk.Tk):
         files = [dict(file=ipa_verify.short_name(f.name), archs=', '.join(f.encrypted_archs) or '?',
                       reason=failures.get(f.name, (ipa_verify.reason(f), ''))[0],
                       error=f.error or failures.get(f.name, ('', ''))[1]) for f in result.encrypted]
-        self.post(self._set_verify, bundle, status, len(result.files), files)
+        self.post(self._set_verify, bundle, status, len(result.files), files, result.type)
         self.post(self.log, Text('log_done', bundle=bundle, path=path))
         if status == ipa_verify.DECRYPTED:
             self.post(self.set_status, bundle, Text('st_done'), 'done')
@@ -1963,30 +2033,32 @@ class DumpGUI(tk.Tk):
                 sftp.close()
             with tempfile.TemporaryDirectory(prefix='ipa-repair-') as work:
                 todo = [job for job in jobs if job.error is None]
-                if todo:
-                    self._run_repair_worker(bundle, todo, work, options, pid)
-                # frida-server sometimes crashes or stops responding: when asked, restart it (killing a
-                # crashed one is harmless) and try what it took down again, as long as that gets further.
-                for _ in range(REPAIR_RETRIES):
-                    retry = [job for job in todo if not job.repaired and job.connection_lost()]
-                    if not retry or not options['restart_frida'] or self.cancel_requested.is_set():
-                        break
-                    self.post(self.log, Text('log_repair_retry', bundle=bundle, n=len(retry)))
-                    if not self._restart_frida_server(options, bundle):
-                        break
-                    # What the last try started would get in the way (the extension's host is spawned again).
-                    self._close_spawned(bundle, options)
-                    before = sum(len(job.done) for job in retry)
-                    for job in retry:
-                        job.reset()
-                    self._run_repair_worker(bundle, retry, work, options, pid)
-                    if sum(len(job.done) for job in retry) == before:
-                        break
-                if any(job.connection_lost() for job in todo if not job.repaired):
-                    # frida-server died and was not restarted (or died again): whatever it held
-                    # suspended must not stay so, frida-server's own relaunch included.
-                    self._release_gated(options, bundle)
-                changed = ipa_repair.apply(path, jobs, work)
+                # Only the first cputype set up for a file works (iOS 8): each slice of a fat file gets its own copy.
+                with self._private_copies(todo if per_slice_copies(options) else [], options):
+                    if todo:
+                        self._run_repair_worker(bundle, todo, work, options, pid)
+                    # frida-server sometimes crashes or stops responding: when asked, restart it (killing a
+                    # crashed one is harmless) and try what it took down again, as long as that gets further.
+                    for _ in range(REPAIR_RETRIES):
+                        retry = [job for job in todo if not job.repaired and job.connection_lost()]
+                        if not retry or not options['restart_frida'] or self.cancel_requested.is_set():
+                            break
+                        self.post(self.log, Text('log_repair_retry', bundle=bundle, n=len(retry)))
+                        if not self._restart_frida_server(options, bundle):
+                            break
+                        # What the last try started would get in the way (the extension's host is spawned again).
+                        self._close_spawned(bundle, options)
+                        before = sum(len(job.done) for job in retry)
+                        for job in retry:
+                            job.reset()
+                        self._run_repair_worker(bundle, retry, work, options, pid)
+                        if sum(len(job.done) for job in retry) == before:
+                            break
+                    if any(job.connection_lost() for job in todo if not job.repaired):
+                        # frida-server died and was not restarted (or died again): whatever it held
+                        # suspended must not stay so, frida-server's own relaunch included.
+                        self._release_gated(options, bundle)
+                    changed = ipa_repair.apply(path, jobs, work)
         except Exception as error:
             self.post(self.log, Text('log_repair_failed', bundle=bundle, error=error))
             return {job.member: ('repair_failed', str(error)) for job in jobs}
@@ -1996,16 +2068,49 @@ class DumpGUI(tk.Tk):
                 failures[job.member] = ('repair_' + job.error[0], job.error[1])
             elif not job.repaired:
                 error = next(iter(job.slice_errors.values()), '')
-                failures[job.member] = repair_failure(error)
+                failures[job.member] = repair_failure(error, job)
         self.post(self.log, Text('log_repair_done', bundle=bundle, n=changed, total=len(jobs)))
         return failures
+
+    @contextlib.contextmanager
+    def _private_copies(self, jobs, options):
+        """iOS 8 sets up decryption of a file for the first cputype that asks, and refuses the others until
+        the file leaves the kernel's cache. For a file with several encrypted slices, give each slice a
+        copy of its own (the executable and the SC_Info folder with its key) on the device."""
+        # A folder name never used before: the kernel keeps what it knows about a path, so a new file under the
+        # path of a deleted one (another app's copy) is not safe.
+        root = '/var/tmp/ipa_extractor_{}_{}'.format(os.getpid(), uuid.uuid4().hex[:8])
+        made = False
+        try:
+            for job in jobs:
+                if len(job.slices) < 2:
+                    continue
+                source = posixpath.dirname(job.device_path)
+                for index in range(len(job.slices)):
+                    folder = '{}/{}_{}/X.app'.format(root, job.id, index)
+                    status, output = remote.run(self.ssh, 'mkdir -p {d} && cp {f} {d}/ && '
+                                                '{{ [ ! -d {s}/SC_Info ] || cp -R {s}/SC_Info {d}/; }}'.format(
+                                                    d=shlex.quote(folder), f=shlex.quote(job.device_path),
+                                                    s=shlex.quote(source)), timeout=300)
+                    made = True
+                    if status == 0:
+                        job.slice_paths[index] = '{}/{}'.format(folder, posixpath.basename(job.device_path))
+            yield
+        finally:
+            for job in jobs:
+                job.slice_paths = {}
+            if made:
+                try:
+                    remote.run(self.ssh, 'rm -rf ' + shlex.quote(root), timeout=60)
+                except Exception:
+                    pass
 
     def _run_repair_worker(self, bundle, jobs, work, options, pid):
         """Run repair_worker.py with the device's frida; marks each job's decrypted slices."""
         jobs_path = os.path.join(work, 'jobs.json')
         with open(jobs_path, 'w', encoding='utf-8') as handle:
             json.dump([job.to_json() for job in jobs], handle)
-        command = [sys.executable, '-u', REPAIR_WORKER, options['frida'], jobs_path, work,
+        command = [frida_versions.python(options['frida_version']), '-u', REPAIR_WORKER, options['frida'], jobs_path, work,
                    '--method', options['method'], '--bundle', bundle]
         if pid:
             command += ['--pid', str(pid)]
@@ -2079,10 +2184,10 @@ class DumpGUI(tk.Tk):
     def reason_text(file):
         return Text('reason_' + file['reason'], error=file['error'])
 
-    def _set_verify(self, bundle, status, total, files):
+    def _set_verify(self, bundle, status, total, files, type_=None):
         """Remember the verification result for the details pane and "Check partially decrypted apps"."""
         if bundle in self.apps:
-            self.apps[bundle]['verify'] = dict(status=status, total=total, files=files)
+            self.apps[bundle]['verify'] = dict(status=status, total=total, files=files, type=type_ or status)
             if bundle in self.tree.selection():
                 self.show_details()
 
@@ -2130,13 +2235,20 @@ class DumpGUI(tk.Tk):
         error = None
         time.sleep(RESTART_GRACE)
         while time.monotonic() < deadline and not self.cancel_requested.is_set():
-            ok, error = probe_frida(options['frida_version'], address)
+            ok, error = probe_frida(options['frida_version'], address, deep=True)
             if options['generation'] != self.generation:
                 return False  # disconnected meanwhile; the tunnel is gone
             if ok:
                 self.post(self.log, Text('log_restarted'))
                 self._release_gated(options, bundle)
                 return True
+            if 'timeout' in str(error).lower():
+                # It answers but runs nothing: a wedged process, not one still starting. Kill it again.
+                try:
+                    self._as_root(options, 'killall -9 frida-server')
+                except Exception:
+                    pass
+                time.sleep(RESTART_GRACE)
             self._resume_frida_server(options)
             time.sleep(RESTART_POLL)
         self.post(self.log, Text('log_restart_failed', error=error))
@@ -2152,7 +2264,7 @@ class DumpGUI(tk.Tk):
 
         report(0, Text('stage_connecting'))
         self._close_running_app(bundle)
-        command = [sys.executable, '-u', WORKER, bundle, '-R', options['frida'],
+        command = [frida_versions.python(options['frida_version']), '-u', WORKER, bundle, '-R', options['frida'],
                    '--ssh-transport', 'tcp', '-H', options['host'], '-p', options['port'],
                    '-u', options['user'], '-o', name, '-v']
         env = dict(frida_versions.env(options['frida_version']), FRIDA_DUMP_SSH_PASSWORD=options['password'],
@@ -2588,6 +2700,17 @@ class DumpGUI(tk.Tk):
         """Install frida `version` side by side with the others; then() runs once Frida reconnects."""
         ok = False
         try:
+            if frida_versions.is_legacy(version):
+                # No wheel for this Python: its own Python 3.8 and the frida egg (frida-ios-dump needs frida 16).
+                frida_versions.prepare_install(version)
+                try:
+                    frida_versions.install_legacy(version, lambda text: self.post(self.log, text))
+                    frida_versions.finish_install(version)
+                    ok = True
+                except Exception as error:
+                    self.post(self.log, Text('log_exec_failed', error=error))
+                    shutil.rmtree(frida_versions.staging(version), ignore_errors=True)
+                return
             commands = self._install_commands(version, dump_dir)
             frida_versions.prepare_install(version)
             if self._run_command(*commands[0]):
@@ -2609,7 +2732,8 @@ class DumpGUI(tk.Tk):
             return
         self.log(Text('log_frida_installed', version=version))
         # No restart needed: reconnect so the best version for this device is picked again.
-        if self.ssh is not None and not self.dumping and dump_dir_status(self.var_dump_dir.get().strip()) == 'ok':
+        if (self.ssh is not None and not self.dumping
+                and (self.direct_method() or dump_dir_status(self.var_dump_dir.get().strip()) == 'ok')):
             self._drop_frida()
             self.connect_frida(then)
 

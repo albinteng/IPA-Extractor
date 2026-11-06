@@ -9,58 +9,70 @@
 // extension started with launchExtension and caught suspended by spawn gating). Frameworks are
 // loaded with loadImage into the app, once hookAppMain has let it start without its UI.
 //
-// Works with Frida 16 and 17 and needs no Objective-C bridge.
+// Works with Frida 12 through 17 and needs no Objective-C bridge. It is written in ES5: Frida 12
+// runs scripts in Duktape, which does not parse let/const, arrow functions or method shorthands.
 
 'use strict';
 
-const O_RDONLY = 0;
-const PROT_READ = 1;
-const PROT_EXEC = 4;
-const MAP_PRIVATE = 2;
+var O_RDONLY = 0;
+var PROT_READ = 1;
+var PROT_EXEC = 4;
+var MAP_PRIVATE = 2;
 
 function exported(name) {
   if (typeof Module.getGlobalExportByName === 'function') {
     return Module.getGlobalExportByName(name); // Frida 17
   }
-  return Module.getExportByName(null, name); // Frida 16
+  return Module.getExportByName(null, name); // Frida 12 to 16
+}
+
+function endsWith(text, suffix) {
+  return text.length >= suffix.length && text.substr(text.length - suffix.length) === suffix;
 }
 
 function moduleExport(module, name) {
   if (typeof Module.findExportByName === 'function') {
     return Module.findExportByName(module, name); // Frida 16
   }
-  const found = Process.findModuleByName(module); // Frida 17
+  var found = Process.findModuleByName(module); // Frida 17
   return found === null ? null : found.findExportByName(name);
 }
 
-const open = new SystemFunction(exported('open'), 'int', ['pointer', 'int']);
-const close = new NativeFunction(exported('close'), 'int', ['int']);
-const mmap = new SystemFunction(exported('mmap'), 'pointer', ['pointer', 'size_t', 'int', 'int', 'int', 'int64']);
-const munmap = new NativeFunction(exported('munmap'), 'int', ['pointer', 'size_t']);
-const mremapEncrypted = new SystemFunction(exported('mremap_encrypted'), 'int',
-  ['pointer', 'size_t', 'uint32', 'uint32', 'uint32']);
-const strerror = new NativeFunction(exported('strerror'), 'pointer', ['int']);
+// Frida 12 has no 'size_t' argument type.
+var SIZE_T = Process.pointerSize === 8 ? 'uint64' : 'uint32';
 
-const mappings = new Map();
-let nextId = 1;
+var open = new SystemFunction(exported('open'), 'int', ['pointer', 'int']);
+var close = new NativeFunction(exported('close'), 'int', ['int']);
+var mmap = new SystemFunction(exported('mmap'), 'pointer', ['pointer', SIZE_T, 'int', 'int', 'int', 'int64']);
+var munmap = new NativeFunction(exported('munmap'), 'int', ['pointer', SIZE_T]);
+var mremapEncrypted = new SystemFunction(exported('mremap_encrypted'), 'int',
+  ['pointer', SIZE_T, 'uint32', 'uint32', 'uint32']);
+var strerror = new NativeFunction(exported('strerror'), 'pointer', ['int']);
+
+var mappings = {};
+var nextId = 1;
 
 function failure(call, result) {
   return call + ' failed: ' + strerror(result.errno).readUtf8String() + ' (errno ' + result.errno + ')';
 }
 
 // Objective-C through objc_msgSend, so Frida 17 needs no bridge.
-let objc = null;
+var objc = null;
 function objcApi() {
   if (objc === null) {
-    const fn = (name, ret, args) => new NativeFunction(exported(name), ret, args);
-    const getClass = fn('objc_getClass', 'pointer', ['pointer']);
-    const registerName = fn('sel_registerName', 'pointer', ['pointer']);
-    const send = (args, ret) => fn('objc_msgSend', ret || 'pointer', ['pointer', 'pointer'].concat(args));
+    var fn = function (name, ret, args) { return new NativeFunction(exported(name), ret, args); };
+    var getClass = fn('objc_getClass', 'pointer', ['pointer']);
+    var registerName = fn('sel_registerName', 'pointer', ['pointer']);
+    var send = function (args, ret) {
+      return fn('objc_msgSend', ret || 'pointer', ['pointer', 'pointer'].concat(args));
+    };
     objc = {
-      cls: (name) => getClass(Memory.allocUtf8String(name)),
-      sel: (name) => registerName(Memory.allocUtf8String(name)),
+      cls: function (name) { return getClass(Memory.allocUtf8String(name)); },
+      sel: function (name) { return registerName(Memory.allocUtf8String(name)); },
       send: send,
-      str: (text) => send(['pointer'])(objc.cls('NSString'), objc.sel('stringWithUTF8String:'), Memory.allocUtf8String(text)),
+      str: function (text) {
+        return send(['pointer'])(objc.cls('NSString'), objc.sel('stringWithUTF8String:'), Memory.allocUtf8String(text));
+      },
     };
   }
   return objc;
@@ -68,28 +80,28 @@ function objcApi() {
 
 rpc.exports = {
   // Decrypt one slice in memory with mremap_encrypted; returns an id for read()/release().
-  decrypt(path, offset, cryptoff, cryptsize, cryptid, cpu, subtype) {
-    const fd = open.call(null, Memory.allocUtf8String(path), O_RDONLY);
+  decrypt: function (path, offset, cryptoff, cryptsize, cryptid, cpu, subtype) {
+    var fd = open.call(null, Memory.allocUtf8String(path), O_RDONLY);
     if (fd.value < 0) {
       throw new Error(failure('open', fd));
     }
     try {
-      const page = Process.pageSize;
-      const start = offset + cryptoff;
-      const aligned = start - (start % page);
-      const delta = start - aligned;
-      const length = cryptsize + delta;
-      const mapped = mmap.call(null, NULL, length, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd.value, aligned);
+      var page = Process.pageSize;
+      var start = offset + cryptoff;
+      var aligned = start - (start % page);
+      var delta = start - aligned;
+      var length = cryptsize + delta;
+      var mapped = mmap.call(null, NULL, length, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd.value, aligned);
       if (mapped.value.equals(ptr('-1'))) {
         throw new Error(failure('mmap', mapped));
       }
-      const result = mremapEncrypted.call(null, mapped.value.add(delta), cryptsize, cryptid, cpu >>> 0, subtype >>> 0);
+      var result = mremapEncrypted.call(null, mapped.value.add(delta), cryptsize, cryptid, cpu >>> 0, subtype >>> 0);
       if (result.value !== 0) {
         munmap(mapped.value, length);
         throw new Error(failure('mremap_encrypted', result));
       }
-      const id = nextId++;
-      mappings.set(id, { base: mapped.value, length: length, delta: delta, size: cryptsize });
+      var id = nextId++;
+      mappings[id] = { base: mapped.value, length: length, delta: delta, size: cryptsize };
       return id;
     } finally {
       close(fd.value);
@@ -97,32 +109,37 @@ rpc.exports = {
   },
 
   // Bytes [start, start + size) of a range decrypted by decrypt().
-  read(id, start, size) {
-    const mapping = mappings.get(id);
+  read: function (id, start, size) {
+    var mapping = mappings[id];
     return mapping.base.add(mapping.delta + start).readByteArray(size);
   },
 
-  release(id) {
-    const mapping = mappings.get(id);
+  release: function (id) {
+    var mapping = mappings[id];
     if (mapping) {
       munmap(mapping.base, mapping.length);
-      mappings.delete(id);
+      delete mappings[id];
     }
   },
 
   // Where the image whose path ends with suffix is loaded, with its CPU type, or null.
   // A process spawned suspended has no module list yet, but the kernel has already mapped
   // (and set up decryption for) its main executable.
-  imageBase(suffix) {
-    let base = null;
-    const module = Process.enumerateModules().find((m) => m.path.endsWith(suffix));
-    if (module) {
-      base = module.base;
-    } else {
-      const range = Process.enumerateRanges('r--').find(
-        (r) => r.file && r.file.offset === 0 && r.file.path.endsWith(suffix));
-      if (range) {
-        base = range.base;
+  imageBase: function (suffix) {
+    var base = null;
+    var modules = Process.enumerateModules();
+    for (var i = 0; i < modules.length && base === null; i++) {
+      if (endsWith(modules[i].path, suffix)) {
+        base = modules[i].base;
+      }
+    }
+    if (base === null) {
+      var ranges = Process.enumerateRanges('r--');
+      for (var j = 0; j < ranges.length && base === null; j++) {
+        var r = ranges[j];
+        if (r.file && r.file.offset === 0 && endsWith(r.file.path, suffix)) {
+          base = r.base;
+        }
       }
     }
     if (base === null) {
@@ -131,18 +148,19 @@ rpc.exports = {
     return { base: base.toString(), cpu: base.add(4).readS32(), subtype: base.add(8).readS32() };
   },
 
-  readAt(base, offset, size) {
+  readAt: function (base, offset, size) {
     return ptr(base).add(offset).readByteArray(size);
   },
 
   // iOS 16 and later decrypt a framework only when it is loaded, and loading needs the app to be
   // past dyld's setup. Called before an app spawned suspended is resumed: UIApplicationMain is
   // replaced by a bare run loop, so the app never brings up its UI (its initializers still run).
-  hookAppMain() {
-    const runLoop = moduleExport('CoreFoundation', 'CFRunLoopRun');
-    let hooked = false;
-    for (const module of ['UIKitCore', 'UIKit']) {
-      const main = moduleExport(module, 'UIApplicationMain');
+  hookAppMain: function () {
+    var runLoop = moduleExport('CoreFoundation', 'CFRunLoopRun');
+    var hooked = false;
+    var names = ['UIKitCore', 'UIKit'];
+    for (var i = 0; i < names.length; i++) {
+      var main = moduleExport(names[i], 'UIApplicationMain');
       if (main !== null && runLoop !== null) {
         Interceptor.replace(main, runLoop);
         hooked = true;
@@ -153,21 +171,21 @@ rpc.exports = {
   },
 
   // Load a framework or dylib (dlopen) so the system decrypts it; imageBase() then finds it.
-  loadImage(path) {
+  loadImage: function (path) {
     return Module.load(path).base.toString();
   },
 
   // Ask the system to start an app extension, as a host does when it uses one. The caller has
   // spawn gating on, so the extension stops before running any code. Returns what was found.
-  launchExtension(identifier) {
-    const o = objcApi();
-    const error = Memory.alloc(Process.pointerSize);
-    const extension = o.send(['pointer', 'pointer'])(o.cls('NSExtension'), o.sel('extensionWithIdentifier:error:'),
+  launchExtension: function (identifier) {
+    var o = objcApi();
+    var error = Memory.alloc(Process.pointerSize);
+    var extension = o.send(['pointer', 'pointer'])(o.cls('NSExtension'), o.sel('extensionWithIdentifier:error:'),
       o.str(identifier), error);
     if (extension.isNull()) {
       return { found: false };
     }
-    const items = o.send([])(o.cls('NSArray'), o.sel('array'));
+    var items = o.send([])(o.cls('NSArray'), o.sel('array'));
     // Fails once the gated extension does not answer; by then it has been read.
     o.send(['pointer', 'pointer'])(extension, o.sel('beginExtensionRequestWithInputItems:error:'), items, error);
     return { found: true };

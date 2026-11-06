@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Disahkan: {n} daripada {total} fail Mach-O masih disulitkan ({status}):",
   "log_verify_failed": "[{bundle}] Tidak dapat mengesahkan IPA: {error}",
   "check_partial": "Tanda apl yang dinyahsulit separa",
-  "check_partial_tip": "Menanda apl yang IPA dinyahsulitnya masih mengandungi fail disulitkan: yang disahkan dalam sesi ini, atau yang ditemui dalam folder output dengan nama fail partial-decrypted / partial-64bit-decrypted (nama fail perlu mengandungi {{type}}).",
+  "check_partial_tip": "Menanda apl yang IPA dinyahsulitnya masih mengandungi fail disulitkan: yang disahkan dalam sesi ini, atau yang ditemui dalam folder output dengan nama fail partial-decrypted… (nama fail perlu mengandungi {{type}}).",
   "st_done_partial32": "✔ Diekstrak (dinyahsulit; hanya slice 32-bit masih disulitkan)",
   "st_partial": "⚠ Dinyahsulit separa: {n} fail masih disulitkan",
   "verify_error": "IPA tidak dapat dibaca: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "tiada proses sistem yang dapat memulakan sambungan apl ini",
   "log_repair_retry": "[{bundle}] {n} fail gagal disebabkan frida-server; memulakannya semula dan mencuba lagi…",
   "log_repair_run_app": "[{bundle}] Membiarkan apl bermula tanpa antara mukanya untuk menyahsulit framework-nya (ini menjalankan kod pengawalan apl)…",
-  "reason_repair_unsupported_minos": "ia memerlukan iOS {error}, jadi peranti ini tidak pernah memuatkannya dan ia tidak dapat dinyahsulit di sini"
+  "reason_repair_unsupported_minos": "ia memerlukan iOS {error}, jadi peranti ini tidak pernah memuatkannya dan ia tidak dapat dinyahsulit di sini",
+  "log_ssh_legacy": "Peranti ini hanya menawarkan kunci hos SSH lama (ssh-rsa); dibenarkan dan dicuba semula…",
+  "log_ssh_retry": "Sambungan SSH gagal ({error}); mencuba sekali lagi…",
+  "st_skipped_lost": "Dilangkau (sambungan terputus)",
+  "log_batch_ssh_lost": "Sambungan SSH terputus: kelompok dihentikan, {n} apl tidak diproses. Sambung semula dan pilih lagi.",
+  "log_conn_lost_partial": "[{bundle}] Sambungan SSH terputus semasa penyahsulitan: fail yang masih disulitkan disebabkan sambungan terputus, bukan peranti. Sambung semula dan ekstrak apl ini sekali lagi.",
+  "m_dump_old_frida": "Mod frida-ios-dump memerlukan frida 16 atau lebih baharu, tetapi peranti ini menggunakan frida {version}.\n\nPilih mod nyahsulit terus dalam Tetapan → Frida.",
+  "reason_repair_oldslice": "ini ialah slice untuk CPU lama yang tidak pernah dijalankan peranti ini; slice yang dijalankan telah dinyahsulit, jadi apl masih berfungsi di sini ({error})",
+  "reason_repair_nomem": "peranti enggan menyahsulitnya ({error})",
+  "tree_loading": "Memuatkan senarai apl…"
 }

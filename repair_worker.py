@@ -134,18 +134,43 @@ class Worker:
         try:
             api = load_agent(self.device.attach(0))  # frida-server itself: no app has to run
         except Exception as error:
-            emit('log', text='frida-server session unavailable ({}); using the app instead'.format(error))
-            api = self.app()
+            # Not the app instead: it runs in a sandbox that cannot open the copies made for it, and starting
+            # apps is what this method avoids. The caller restarts frida-server and tries again.
+            message = 'frida-server did not respond ({})'.format(clean(str(error)))
+            for job in jobs:
+                self.fail_all(job, message)
+            return
         for job in jobs:
-            for index, item in enumerate(job['slices']):
+            # 64-bit slices first: the original path of a file serves one cputype only (the first to ask), and
+            # the 64-bit one is what a 64-bit device runs.
+            for index, item in sorted(enumerate(job['slices']), key=lambda pair: not pair[1]['cpu'] & 0x01000000):
                 target = self.target(job, index)
                 try:
-                    handle = api.decrypt(job['path'], item['offset'], item['cryptoff'], item['cryptsize'],
-                                         item['cryptid'], item['cpu'], item['subtype'])
+                    path = item.get('path', job['path'])
                     try:
-                        write_range(target, item['cryptsize'], lambda start, size: api.read(handle, start, size))
+                        used = api
+                        try:
+                            handle = used.decrypt(path, item['offset'], item['cryptoff'], item['cryptsize'],
+                                                  item['cryptid'], item['cpu'], item['subtype'])
+                        except Exception as error:
+                            # Some files (some app extensions) cannot be decrypted from a private copy (errno 12)
+                            # though they can from where they are installed.
+                            if 'errno 12' not in str(error) or path == job['path']:
+                                raise
+                            handle = used.decrypt(job['path'], item['offset'], item['cryptoff'], item['cryptsize'],
+                                                  item['cryptid'], item['cpu'], item['subtype'])
+                    except Exception as error:
+                        # A 32-bit slice not aligned to the 64-bit page size (16 KB) can only be mapped by a
+                        # 32-bit process: the app itself (spawned suspended, none of its code runs).
+                        if 'errno 22' not in str(error) or item['cpu'] & 0x01000000:
+                            raise
+                        used = self.app()
+                        handle = used.decrypt(job['path'], item['offset'], item['cryptoff'], item['cryptsize'],
+                                              item['cryptid'], item['cpu'], item['subtype'])
+                    try:
+                        write_range(target, item['cryptsize'], lambda start, size: used.read(handle, start, size))
                     finally:
-                        api.release(handle)
+                        used.release(handle)
                     self.result(job, index)
                 except Exception as error:
                     self.result(job, index, str(error), target)

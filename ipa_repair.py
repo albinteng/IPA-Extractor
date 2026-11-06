@@ -39,6 +39,7 @@ class Job:
         self.error = None     # why the file was not repaired, once known
         self.done = set()     # indexes of decrypted slices
         self.slice_errors = {}  # index -> error text from the device
+        self.slice_paths = {}   # index -> private copy of the file on the device (see Job.to_json)
 
     def to_json(self):
         # suffix finds the image in a process, whichever form (/var or /private/var) the path takes there.
@@ -46,7 +47,9 @@ class Job:
         return dict(id=self.id, path=self.device_path, kind=self.kind, extension=self.extension,
                     suffix=app_dir + '/' + ipa_verify.short_name(self.member),
                     slices=[dict(offset=s.offset, cryptoff=s.cryptoff, cryptsize=s.cryptsize, cryptid=s.cryptid,
-                                 cpu=s.cpu, subtype=s.subtype) for s in self.slices])
+                                 cpu=s.cpu, subtype=s.subtype,
+                                 **({'path': self.slice_paths[i]} if i in self.slice_paths else {}))
+                            for i, s in enumerate(self.slices)])
 
     @property
     def repaired(self):

@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Verificado: {n} de {total} arquivos Mach-O ainda estão criptografados ({status}):",
   "log_verify_failed": "[{bundle}] Não foi possível verificar o IPA: {error}",
   "check_partial": "Marcar apps parcialmente descriptografados",
-  "check_partial_tip": "Marca os apps cujo IPA descriptografado ainda tem arquivos criptografados: verificados nesta sessão, ou encontrados na pasta de saída com nome de arquivo partial-decrypted / partial-64bit-decrypted (requer {{type}} no nome do arquivo).",
+  "check_partial_tip": "Marca os apps cujo IPA descriptografado ainda tem arquivos criptografados: verificados nesta sessão, ou encontrados na pasta de saída com nome de arquivo partial-decrypted… (requer {{type}} no nome do arquivo).",
   "st_done_partial32": "✔ Extraído (descriptografado; só as slices de 32 bits ainda criptografadas)",
   "st_partial": "⚠ Parcialmente descriptografado: {n} arquivo(s) ainda criptografado(s)",
   "verify_error": "o IPA não pode ser lido: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "nenhum processo do sistema conseguiu iniciar esta extensão de app",
   "log_repair_retry": "[{bundle}] {n} arquivo(s) falharam por causa do frida-server; reiniciando-o e tentando novamente…",
   "log_repair_run_app": "[{bundle}] Iniciando o app sem sua interface para descriptografar seus frameworks (isso executa o código de inicialização do app)…",
-  "reason_repair_unsupported_minos": "requer iOS {error}, então este dispositivo nunca o carrega e ele não pode ser descriptografado aqui"
+  "reason_repair_unsupported_minos": "requer iOS {error}, então este dispositivo nunca o carrega e ele não pode ser descriptografado aqui",
+  "log_ssh_legacy": "Este dispositivo só oferece uma chave de host SSH antiga (ssh-rsa); ela será permitida e uma nova tentativa será feita…",
+  "log_ssh_retry": "Falha na conexão SSH ({error}); tentando mais uma vez…",
+  "st_skipped_lost": "Ignorado (conexão perdida)",
+  "log_batch_ssh_lost": "Conexão SSH perdida: o lote foi interrompido e {n} app(s) não foram processados. Reconecte e selecione-os novamente.",
+  "log_conn_lost_partial": "[{bundle}] A conexão SSH foi perdida durante a descriptografia: os arquivos ainda criptografados se devem à conexão perdida, não ao dispositivo. Reconecte e extraia este app novamente.",
+  "m_dump_old_frida": "O modo frida-ios-dump exige frida 16 ou posterior, mas este dispositivo usa frida {version}.\n\nEscolha o modo de descriptografia direta em Configurações → Frida.",
+  "reason_repair_oldslice": "é o slice de uma CPU mais antiga que este dispositivo nunca executa; o slice que ele executa foi descriptografado, então o app continua funcionando aqui ({error})",
+  "reason_repair_nomem": "o dispositivo se recusou a descriptografá-lo ({error})",
+  "tree_loading": "Carregando a lista de apps…"
 }

@@ -15,7 +15,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import remote
 
-APP_ROOTS = ('/private/var/containers/Bundle/Application', '/Applications', '/var/jb/Applications')
+# iOS 10 and later keep user apps in /var/containers; iOS 8 and 9 in /var/mobile/Containers (iOS 7 and earlier
+# in /var/mobile/Applications, which has no container manager and is not covered).
+APP_ROOTS = ('/private/var/containers/Bundle/Application', '/private/var/mobile/Containers/Bundle/Application',
+             '/Applications', '/var/jb/Applications')
 DATA_ROOT = '/private/var/mobile/Containers/Data/Application'
 # SFTP requests are sequential per channel; several channels hide the round trips.
 # sshd allows 10 sessions per connection by default; the GUI needs a few of its own.

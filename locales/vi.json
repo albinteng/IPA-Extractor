@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Đã kiểm tra: {n} trên {total} tệp Mach-O vẫn còn mã hóa ({status}):",
   "log_verify_failed": "[{bundle}] Không thể kiểm tra IPA: {error}",
   "check_partial": "Đánh dấu ứng dụng giải mã chưa hoàn toàn",
-  "check_partial_tip": "Đánh dấu ứng dụng có IPA đã giải mã nhưng vẫn còn tệp mã hóa: đã kiểm tra trong phiên này, hoặc tìm thấy trong thư mục đầu ra với tên tệp partial-decrypted / partial-64bit-decrypted (tên tệp cần có {{type}}).",
+  "check_partial_tip": "Đánh dấu ứng dụng có IPA đã giải mã nhưng vẫn còn tệp mã hóa: đã kiểm tra trong phiên này, hoặc tìm thấy trong thư mục đầu ra với tên tệp partial-decrypted… (tên tệp cần có {{type}}).",
   "st_done_partial32": "✔ Đã trích xuất (đã giải mã; chỉ còn slice 32-bit bị mã hóa)",
   "st_partial": "⚠ Giải mã chưa hoàn toàn: {n} tệp vẫn còn mã hóa",
   "verify_error": "không thể đọc IPA: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "không có tiến trình hệ thống nào khởi động được tiện ích mở rộng ứng dụng này",
   "log_repair_retry": "[{bundle}] {n} tệp thất bại do frida-server; đang khởi động lại và thử lại…",
   "log_repair_run_app": "[{bundle}] Đang cho ứng dụng khởi động mà không hiện giao diện để giải mã framework của nó (việc này chạy mã khởi tạo của ứng dụng)…",
-  "reason_repair_unsupported_minos": "cần iOS {error}, nên thiết bị này không bao giờ tải nó và không thể giải mã ở đây"
+  "reason_repair_unsupported_minos": "cần iOS {error}, nên thiết bị này không bao giờ tải nó và không thể giải mã ở đây",
+  "log_ssh_legacy": "Thiết bị này chỉ cung cấp khóa máy chủ SSH cũ (ssh-rsa); đã cho phép và thử lại…",
+  "log_ssh_retry": "Kết nối SSH thất bại ({error}); thử lại một lần nữa…",
+  "st_skipped_lost": "Đã bỏ qua (mất kết nối)",
+  "log_batch_ssh_lost": "Mất kết nối SSH: đã dừng lô, {n} ứng dụng chưa được xử lý. Hãy kết nối lại và chọn chúng lần nữa.",
+  "log_conn_lost_partial": "[{bundle}] Mất kết nối SSH khi đang giải mã: các tệp còn mã hóa là do mất kết nối chứ không phải do thiết bị. Hãy kết nối lại và trích xuất lại ứng dụng này.",
+  "m_dump_old_frida": "Chế độ frida-ios-dump cần frida 16 trở lên, nhưng thiết bị này dùng frida {version}.\n\nHãy chọn chế độ giải mã trực tiếp trong Cài đặt → Frida.",
+  "reason_repair_oldslice": "đây là slice của CPU cũ hơn mà thiết bị này không bao giờ chạy; slice mà nó chạy đã được giải mã nên ứng dụng vẫn dùng được ở đây ({error})",
+  "reason_repair_nomem": "thiết bị từ chối giải mã nó ({error})",
+  "tree_loading": "Đang tải danh sách ứng dụng…"
 }

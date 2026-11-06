@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Terverifikasi: {n} dari {total} file Mach-O masih terenkripsi ({status}):",
   "log_verify_failed": "[{bundle}] Tidak dapat memverifikasi IPA: {error}",
   "check_partial": "Centang app yang terdekripsi sebagian",
-  "check_partial_tip": "Mencentang app yang IPA terdekripsinya masih berisi file terenkripsi: yang diverifikasi pada sesi ini, atau yang ditemukan di folder output dengan nama file partial-decrypted / partial-64bit-decrypted (nama file harus memuat {{type}}).",
+  "check_partial_tip": "Mencentang app yang IPA terdekripsinya masih berisi file terenkripsi: yang diverifikasi pada sesi ini, atau yang ditemukan di folder output dengan nama file partial-decrypted… (nama file harus memuat {{type}}).",
   "st_done_partial32": "✔ Diekstrak (terdekripsi; hanya slice 32-bit yang masih terenkripsi)",
   "st_partial": "⚠ Terdekripsi sebagian: {n} file masih terenkripsi",
   "verify_error": "IPA tidak dapat dibaca: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "tidak ada proses sistem yang dapat memulai ekstensi app ini",
   "log_repair_retry": "[{bundle}] {n} file gagal karena frida-server; memulai ulang frida-server dan mencoba lagi…",
   "log_repair_run_app": "[{bundle}] Membiarkan app berjalan tanpa antarmukanya untuk mendekripsi framework-nya (ini menjalankan kode inisialisasi app)…",
-  "reason_repair_unsupported_minos": "memerlukan iOS {error}, jadi perangkat ini tidak pernah memuatnya dan file ini tidak dapat didekripsi di sini"
+  "reason_repair_unsupported_minos": "memerlukan iOS {error}, jadi perangkat ini tidak pernah memuatnya dan file ini tidak dapat didekripsi di sini",
+  "log_ssh_legacy": "Perangkat ini hanya menawarkan kunci host SSH lama (ssh-rsa); diizinkan lalu dicoba lagi…",
+  "log_ssh_retry": "Koneksi SSH gagal ({error}); mencoba sekali lagi…",
+  "st_skipped_lost": "Dilewati (koneksi terputus)",
+  "log_batch_ssh_lost": "Koneksi SSH terputus: batch dihentikan, {n} app belum diproses. Sambungkan ulang dan pilih lagi.",
+  "log_conn_lost_partial": "[{bundle}] Koneksi SSH terputus saat mendekripsi: file yang masih terenkripsi disebabkan koneksi yang terputus, bukan perangkat. Sambungkan ulang dan ekstrak app ini lagi.",
+  "m_dump_old_frida": "Mode frida-ios-dump memerlukan frida 16 atau lebih baru, tetapi perangkat ini memakai frida {version}.\n\nPilih mode dekripsi langsung di Pengaturan → Frida.",
+  "reason_repair_oldslice": "ini adalah slice untuk CPU lama yang tidak pernah dijalankan perangkat ini; slice yang dijalankan sudah didekripsi, jadi app tetap berfungsi di sini ({error})",
+  "reason_repair_nomem": "perangkat menolak mendekripsinya ({error})",
+  "tree_loading": "Memuat daftar app…"
 }

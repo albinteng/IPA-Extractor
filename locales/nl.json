@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Gecontroleerd: {n} van {total} Mach-O-bestanden zijn nog versleuteld ({status}):",
   "log_verify_failed": "[{bundle}] Kan de IPA niet controleren: {error}",
   "check_partial": "Gedeeltelijk ontsleutelde apps aanvinken",
-  "check_partial_tip": "Vinkt apps aan waarvan de ontsleutelde IPA nog versleutelde bestanden bevat: gecontroleerd in deze sessie, of in de uitvoermap gevonden met partial-decrypted / partial-64bit-decrypted in de bestandsnaam (vereist {{type}} in de bestandsnaam).",
+  "check_partial_tip": "Vinkt apps aan waarvan de ontsleutelde IPA nog versleutelde bestanden bevat: gecontroleerd in deze sessie, of in de uitvoermap gevonden met partial-decrypted… in de bestandsnaam (vereist {{type}} in de bestandsnaam).",
   "st_done_partial32": "✔ Geëxtraheerd (ontsleuteld; alleen 32-bit-slices nog versleuteld)",
   "st_partial": "⚠ Gedeeltelijk ontsleuteld: {n} bestand(en) nog versleuteld",
   "verify_error": "de IPA kan niet worden gelezen: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "geen systeemproces kon deze app-extensie starten",
   "log_repair_retry": "[{bundle}] {n} bestand(en) mislukt door frida-server; frida-server wordt herstart en het wordt opnieuw geprobeerd…",
   "log_repair_run_app": "[{bundle}] App wordt zonder gebruikersinterface gestart om de frameworks ervan te ontsleutelen (hierbij wordt de initialisatiecode van de app uitgevoerd)…",
-  "reason_repair_unsupported_minos": "vereist iOS {error}, dus dit apparaat laadt het nooit en het kan hier niet worden ontsleuteld"
+  "reason_repair_unsupported_minos": "vereist iOS {error}, dus dit apparaat laadt het nooit en het kan hier niet worden ontsleuteld",
+  "log_ssh_legacy": "Dit apparaat biedt alleen een oude SSH-hostsleutel (ssh-rsa); die wordt toegestaan en er wordt opnieuw geprobeerd…",
+  "log_ssh_retry": "SSH-verbinding mislukt ({error}); nog één keer proberen…",
+  "st_skipped_lost": "Overgeslagen (verbinding verbroken)",
+  "log_batch_ssh_lost": "SSH-verbinding verbroken: de batch is gestopt, {n} app(s) niet verwerkt. Verbind opnieuw en selecteer ze opnieuw.",
+  "log_conn_lost_partial": "[{bundle}] De SSH-verbinding werd verbroken tijdens het ontsleutelen: bestanden die nog versleuteld zijn, komen door de verbroken verbinding, niet door het apparaat. Verbind opnieuw en haal deze app opnieuw op.",
+  "m_dump_old_frida": "De frida-ios-dump-modus vereist frida 16 of nieuwer, maar dit apparaat gebruikt frida {version}.\n\nKies de directe ontsleutelmodus in Instellingen → Frida.",
+  "reason_repair_oldslice": "dit is de slice voor een oudere cpu die dit apparaat nooit uitvoert; de slice die het uitvoert is ontsleuteld, dus de app werkt hier nog ({error})",
+  "reason_repair_nomem": "het apparaat weigerde het te ontsleutelen ({error})",
+  "tree_loading": "App-lijst laden…"
 }

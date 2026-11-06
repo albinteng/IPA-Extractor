@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Zweryfikowano: nadal zaszyfrowane pliki Mach-O: {n} z {total} ({status}):",
   "log_verify_failed": "[{bundle}] Nie można zweryfikować IPA: {error}",
   "check_partial": "Zaznacz częściowo odszyfrowane aplikacje",
-  "check_partial_tip": "Zaznacza aplikacje, których odszyfrowane IPA nadal zawiera zaszyfrowane pliki: zweryfikowane w tej sesji lub znalezione w folderze wyjściowym pod nazwą pliku partial-decrypted / partial-64bit-decrypted (wymaga {{type}} w nazwie pliku).",
+  "check_partial_tip": "Zaznacza aplikacje, których odszyfrowane IPA nadal zawiera zaszyfrowane pliki: zweryfikowane w tej sesji lub znalezione w folderze wyjściowym pod nazwą pliku partial-decrypted… (wymaga {{type}} w nazwie pliku).",
   "st_done_partial32": "✔ Wyodrębniono (odszyfrowane; zaszyfrowane pozostały tylko wycinki 32-bitowe)",
   "st_partial": "⚠ Częściowo odszyfrowane: nadal zaszyfrowane pliki: {n}",
   "verify_error": "nie można odczytać IPA: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "żaden proces systemowy nie mógł uruchomić tego rozszerzenia aplikacji",
   "log_repair_retry": "[{bundle}] Pliki, które zawiodły z powodu frida-server: {n}; ponowne uruchamianie go i kolejna próba…",
   "log_repair_run_app": "[{bundle}] Uruchamianie aplikacji bez interfejsu w celu odszyfrowania jej frameworków (wykonuje to kod inicjalizacyjny aplikacji)…",
-  "reason_repair_unsupported_minos": "wymaga iOS {error}, więc to urządzenie nigdy go nie ładuje i nie można go tu odszyfrować"
+  "reason_repair_unsupported_minos": "wymaga iOS {error}, więc to urządzenie nigdy go nie ładuje i nie można go tu odszyfrować",
+  "log_ssh_legacy": "To urządzenie oferuje tylko stary klucz hosta SSH (ssh-rsa); zostanie dozwolony i ponowiona próba…",
+  "log_ssh_retry": "Połączenie SSH nie powiodło się ({error}); próba jeszcze raz…",
+  "st_skipped_lost": "Pominięto (utracono połączenie)",
+  "log_batch_ssh_lost": "Utracono połączenie SSH: partia została zatrzymana, nieprzetworzone aplikacje: {n}. Połącz się ponownie i zaznacz je jeszcze raz.",
+  "log_conn_lost_partial": "[{bundle}] Połączenie SSH zostało utracone podczas odszyfrowywania: pliki, które nadal są zaszyfrowane, wynikają z utraty połączenia, a nie z urządzenia. Połącz się ponownie i wyodrębnij tę aplikację jeszcze raz.",
+  "m_dump_old_frida": "Tryb frida-ios-dump wymaga frida 16 lub nowszej, a to urządzenie używa frida {version}.\n\nWybierz tryb bezpośredniego odszyfrowywania w Ustawieniach → Frida.",
+  "reason_repair_oldslice": "to slice dla starszego procesora, którego to urządzenie nigdy nie uruchamia; uruchamiany slice został odszyfrowany, więc aplikacja nadal tu działa ({error})",
+  "reason_repair_nomem": "urządzenie odmówiło odszyfrowania ({error})",
+  "tree_loading": "Wczytywanie listy aplikacji…"
 }

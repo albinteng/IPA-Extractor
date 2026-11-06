@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Verificato: {n} file Mach-O su {total} sono ancora crittografati ({status}):",
   "log_verify_failed": "[{bundle}] Impossibile verificare l'IPA: {error}",
   "check_partial": "Spunta app decrittografate parzialmente",
-  "check_partial_tip": "Spunta le app il cui IPA decrittografato contiene ancora file crittografati: verificate in questa sessione o trovate nella cartella di destinazione con un nome file partial-decrypted / partial-64bit-decrypted (richiede {{type}} nel nome file).",
+  "check_partial_tip": "Spunta le app il cui IPA decrittografato contiene ancora file crittografati: verificate in questa sessione o trovate nella cartella di destinazione con un nome file partial-decrypted… (richiede {{type}} nel nome file).",
   "st_done_partial32": "✔ Estratto (decrittografato; solo le slice a 32 bit restano crittografate)",
   "st_partial": "⚠ Decrittografato parzialmente: {n} file ancora crittografati",
   "verify_error": "impossibile leggere l'IPA: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "nessun processo di sistema è riuscito ad avviare questa estensione dell'app",
   "log_repair_retry": "[{bundle}] {n} file non riusciti a causa di frida-server; riavvio e nuovo tentativo…",
   "log_repair_run_app": "[{bundle}] Avvio dell'app senza la sua interfaccia per decrittografarne i framework (viene eseguito il codice di inizializzazione dell'app)…",
-  "reason_repair_unsupported_minos": "richiede iOS {error}, quindi questo dispositivo non lo carica mai e qui non può essere decrittografato"
+  "reason_repair_unsupported_minos": "richiede iOS {error}, quindi questo dispositivo non lo carica mai e qui non può essere decrittografato",
+  "log_ssh_legacy": "Questo dispositivo offre solo una vecchia chiave host SSH (ssh-rsa); viene consentita e si riprova…",
+  "log_ssh_retry": "Connessione SSH non riuscita ({error}); nuovo tentativo…",
+  "st_skipped_lost": "Saltata (connessione persa)",
+  "log_batch_ssh_lost": "Connessione SSH persa: il batch è stato interrotto, {n} app non elaborate. Riconnettiti e selezionale di nuovo.",
+  "log_conn_lost_partial": "[{bundle}] La connessione SSH è stata persa durante la decrittografia: i file ancora cifrati dipendono dalla connessione persa, non dal dispositivo. Riconnettiti ed estrai di nuovo questa app.",
+  "m_dump_old_frida": "La modalità frida-ios-dump richiede frida 16 o successivo, ma questo dispositivo usa frida {version}.\n\nScegli la modalità di decrittografia diretta in Impostazioni → Frida.",
+  "reason_repair_oldslice": "è lo slice di una CPU più vecchia che questo dispositivo non esegue mai; lo slice eseguito è stato decrittato, quindi l'app funziona ancora qui ({error})",
+  "reason_repair_nomem": "il dispositivo ha rifiutato di decrittarlo ({error})",
+  "tree_loading": "Caricamento dell'elenco app…"
 }

@@ -255,7 +255,7 @@
   "log_verify_partial": "[{bundle}] 検証: {total} 個中 {n} 個の Mach-O ファイルがまだ暗号化されています（{status}）:",
   "log_verify_failed": "[{bundle}] IPA を検証できませんでした: {error}",
   "check_partial": "部分的に復号されたアプリをチェック",
-  "check_partial_tip": "復号 IPA に暗号化されたファイルが残っているアプリをチェックします。対象は、このセッションで検証したもの、または出力フォルダーに partial-decrypted / partial-64bit-decrypted というファイル名で見つかったものです（ファイル名に {{type}} が必要です）。",
+  "check_partial_tip": "復号 IPA に暗号化されたファイルが残っているアプリをチェックします。対象は、このセッションで検証したもの、または出力フォルダーに partial-decrypted… というファイル名で見つかったものです（ファイル名に {{type}} が必要です）。",
   "st_done_partial32": "✔ 抽出済み（復号、32 ビットスライスのみ暗号化）",
   "st_partial": "⚠ 部分的に復号: {n} 個のファイルがまだ暗号化されています",
   "verify_error": "IPA を読み込めません: {error}",
@@ -300,5 +300,14 @@
   "reason_repair_unsupported_extension": "このアプリ拡張機能を起動できるシステムプロセスがありませんでした",
   "log_repair_retry": "[{bundle}] frida-server が原因で {n} 個のファイルが失敗しました。再起動して再試行します…",
   "log_repair_run_app": "[{bundle}] フレームワークを復号するため、アプリを UI なしで起動しています（アプリの初期化コードが実行されます）…",
-  "reason_repair_unsupported_minos": "iOS {error} が必要なため、このデバイスでは読み込まれず、ここでは復号できません"
+  "reason_repair_unsupported_minos": "iOS {error} が必要なため、このデバイスでは読み込まれず、ここでは復号できません",
+  "log_ssh_legacy": "このデバイスは古い SSH ホストキー（ssh-rsa）しか提供しません。許可して再試行します…",
+  "log_ssh_retry": "SSH 接続に失敗しました（{error}）。もう一度試します…",
+  "st_skipped_lost": "スキップ（接続が切断）",
+  "log_batch_ssh_lost": "SSH 接続が切断されました。バッチを中止し、{n} 個のアプリは未処理です。再接続してもう一度選択してください。",
+  "log_conn_lost_partial": "[{bundle}] 復号中に SSH 接続が切断されました。まだ暗号化されているファイルはデバイスではなく接続切断が原因です。再接続してこのアプリをもう一度抽出してください。",
+  "m_dump_old_frida": "frida-ios-dump モードには frida 16 以降が必要ですが、このデバイスは frida {version} です。\n\n設定 → Frida で「直接復号モード」を選んでください。",
+  "reason_repair_oldslice": "古い CPU 用のスライスで、このデバイスでは実行されません。実行されるスライスは復号済みなので、アプリはこのデバイスで動作します（{error}）",
+  "reason_repair_nomem": "デバイスが復号を拒否しました（{error}）",
+  "tree_loading": "アプリ一覧を読み込み中…"
 }

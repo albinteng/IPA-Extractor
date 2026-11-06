@@ -251,7 +251,7 @@
   "log_verify_partial": "[{bundle}] Verificado: {n} de {total} archivos Mach-O siguen cifrados ({status}):",
   "log_verify_failed": "[{bundle}] No se pudo verificar el IPA: {error}",
   "check_partial": "Marcar descifradas parcialmente",
-  "check_partial_tip": "Marca las apps cuyo IPA descifrado aún tiene archivos cifrados: verificadas en esta sesión o encontradas en la carpeta de salida con un nombre de archivo partial-decrypted / partial-64bit-decrypted (requiere {{type}} en el nombre de archivo).",
+  "check_partial_tip": "Marca las apps cuyo IPA descifrado aún tiene archivos cifrados: verificadas en esta sesión o encontradas en la carpeta de salida con un nombre de archivo partial-decrypted… (requiere {{type}} en el nombre de archivo).",
   "st_done_partial32": "✔ Extraído (descifrado; solo siguen cifrados los slices de 32 bits)",
   "st_partial": "⚠ Descifrado parcial: {n} archivo(s) siguen cifrados",
   "verify_error": "no se puede leer el IPA: {error}",
@@ -296,5 +296,14 @@
   "reason_repair_unsupported_extension": "ningún proceso del sistema pudo iniciar esta extensión de app",
   "log_repair_retry": "[{bundle}] {n} archivo(s) fallaron por frida-server; reiniciándolo y reintentando…",
   "log_repair_run_app": "[{bundle}] Dejando que la app se inicie sin su interfaz para descifrar sus frameworks (esto ejecuta el código de inicialización de la app)…",
-  "reason_repair_unsupported_minos": "requiere iOS {error}, así que este dispositivo nunca lo carga y no se puede descifrar aquí"
+  "reason_repair_unsupported_minos": "requiere iOS {error}, así que este dispositivo nunca lo carga y no se puede descifrar aquí",
+  "log_ssh_legacy": "Este dispositivo solo ofrece una clave de host SSH antigua (ssh-rsa); se permite y se vuelve a intentar…",
+  "log_ssh_retry": "Falló la conexión SSH ({error}); reintentando una vez más…",
+  "st_skipped_lost": "Omitida (conexión perdida)",
+  "log_batch_ssh_lost": "Conexión SSH perdida: el lote se detuvo y {n} app(s) no se procesaron. Reconecta y vuelve a seleccionarlas.",
+  "log_conn_lost_partial": "[{bundle}] Se perdió la conexión SSH durante el descifrado: los archivos que siguen cifrados se deben a la conexión perdida, no al dispositivo. Reconecta y extrae esta app de nuevo.",
+  "m_dump_old_frida": "El modo frida-ios-dump requiere frida 16 o posterior, pero este dispositivo usa frida {version}.\n\nElige el modo de descifrado directo en Ajustes → Frida.",
+  "reason_repair_oldslice": "es el slice de una CPU más antigua que este dispositivo nunca ejecuta; el slice que ejecuta se descifró, así que la app sigue funcionando aquí ({error})",
+  "reason_repair_nomem": "el dispositivo rechazó descifrarlo ({error})",
+  "tree_loading": "Cargando la lista de apps…"
 }

@@ -254,7 +254,7 @@
   "log_verify_partial": "[{bundle}] 검증: Mach-O 파일 {total}개 중 {n}개가 아직 암호화됨 ({status}):",
   "log_verify_failed": "[{bundle}] IPA를 검증할 수 없습니다: {error}",
   "check_partial": "부분 복호화 앱 체크",
-  "check_partial_tip": "복호화 IPA에 아직 암호화된 파일이 있는 앱을 체크합니다. 이번 세션에서 검증했거나, 출력 폴더에서 partial-decrypted / partial-64bit-decrypted 파일 이름으로 찾은 앱이 대상입니다 (파일 이름에 {{type}} 필요).",
+  "check_partial_tip": "복호화 IPA에 아직 암호화된 파일이 있는 앱을 체크합니다. 이번 세션에서 검증했거나, 출력 폴더에서 partial-decrypted… 파일 이름으로 찾은 앱이 대상입니다 (파일 이름에 {{type}} 필요).",
   "st_done_partial32": "✔ 추출됨 (복호화, 32비트 슬라이스만 암호화됨)",
   "st_partial": "⚠ 부분 복호화: 파일 {n}개가 아직 암호화됨",
   "verify_error": "IPA를 읽을 수 없음: {error}",
@@ -299,5 +299,14 @@
   "reason_repair_unsupported_extension": "이 앱 확장을 시작할 수 있는 시스템 프로세스가 없습니다",
   "log_repair_retry": "[{bundle}] frida-server 문제로 파일 {n}개가 실패했습니다. 재시작 후 다시 시도합니다…",
   "log_repair_run_app": "[{bundle}] 프레임워크를 복호화하기 위해 앱을 UI 없이 시작하는 중(앱의 초기화 코드가 실행됨)…",
-  "reason_repair_unsupported_minos": "iOS {error} 이상이 필요하므로 이 기기는 이를 로드하지 않으며 여기서 복호화할 수 없습니다"
+  "reason_repair_unsupported_minos": "iOS {error} 이상이 필요하므로 이 기기는 이를 로드하지 않으며 여기서 복호화할 수 없습니다",
+  "log_ssh_legacy": "이 기기는 오래된 SSH 호스트 키(ssh-rsa)만 제공합니다. 허용하고 다시 시도합니다…",
+  "log_ssh_retry": "SSH 연결 실패({error}). 한 번 더 시도합니다…",
+  "st_skipped_lost": "건너뜀(연결 끊김)",
+  "log_batch_ssh_lost": "SSH 연결이 끊어졌습니다. 일괄 작업을 중단했고 앱 {n}개가 처리되지 않았습니다. 다시 연결한 뒤 선택하세요.",
+  "log_conn_lost_partial": "[{bundle}] 복호화 중 SSH 연결이 끊어졌습니다. 아직 암호화된 파일은 기기가 아니라 연결 끊김 때문입니다. 다시 연결하고 이 앱을 다시 추출하세요.",
+  "m_dump_old_frida": "frida-ios-dump 모드는 frida 16 이상이 필요하지만 이 기기는 frida {version}을 사용합니다.\n\n설정 → Frida에서 직접 복호화 모드를 선택하세요.",
+  "reason_repair_oldslice": "이 기기가 실행하지 않는 오래된 CPU용 슬라이스입니다. 실행되는 슬라이스는 복호화되었으므로 앱은 이 기기에서 계속 동작합니다({error})",
+  "reason_repair_nomem": "기기가 복호화를 거부했습니다({error})",
+  "tree_loading": "앱 목록을 불러오는 중…"
 }
