@@ -75,7 +75,9 @@ brew install python python-tk   # or use the python.org installer, which include
 
 `ipa_extractor.sh` keeps the tool's Python packages in `./.venv`, created on first run, so the system Python is never modified.
 
-## Usage
+## GUI
+
+### Usage
 
 1. Enter the device IP, SSH account (`root` or `mobile`, see above) and password, then click **Connect**. The app list loads over SSH; Frida connects as well in *Frida* (with frida-ios-dump, once its folder is set up). The Frida status beside SSH is shown only then, not with *Native helper*.
 2. Check the apps you want (click ☐, double-click a row, or select rows and press Space).
@@ -85,7 +87,7 @@ Decrypted IPAs are made without Frida by default (*Native helper*): nothing need
 
 To use Frida instead, open **Settings → Decryption**, choose *Frida* and click *Install Frida dependencies* to add a `frida` version (the device's frida-server version is recommended); it runs `pip install --target` into that version's folder. No restart is needed. To use frida-ios-dump, choose *frida-ios-dump decryption mode* under *Frida*: *Install frida-ios-dump* downloads the latest version from GitHub to a folder you choose, *Install Frida dependencies* also runs `npm install`, and the device must stay unlocked with the screen on.
 
-## Settings
+### Settings
 
 | Tab | Options |
 | --- | --- |
@@ -100,6 +102,30 @@ Defaults: SSH port 22 with no account, *Native helper* with the helper on *Autom
 Installed `frida` versions are kept in `frida_versions/` next to the tool (`~/.ipa_extractor/frida_versions` when the tool's folder is read-only); a `frida` installed in Python's own site-packages by version 1.0 is no longer used.
 
 Settings are stored in `settings.json` next to the tool, so they move with its folder; only values that differ from the defaults are written. If the tool's folder is read-only, `~/.ipa_extractor.json` (`%USERPROFILE%\.ipa_extractor.json` on Windows) is used instead. Delete the file to restore the defaults. *Remember password* stores the SSH password there in plain text.
+
+## CLI
+
+Everything the window does is also available without it, for scripts and servers: `ipa_cli.py` (or any arguments to `ipa_extractor.py` / `ipa_extractor.sh`; it needs the same Python packages, and Python's `tkinter` module must be installed, but no display is used). It reads the device and the options from `settings.json`, the file the window saves, and options given on the command line override it.
+
+```
+python ipa_cli.py apps -H 192.168.1.20 -u root          list the apps (add --json for scripts)
+python ipa_cli.py extract com.example.app               original IPAs
+python ipa_cli.py decrypt --all --non-apple             decrypted IPAs, every app the filters let through
+python ipa_cli.py decrypt --mode frida-direct com.example.app
+python ipa_cli.py verify some.ipa                       is it really decrypted?
+python ipa_cli.py config show                           the settings; config set theme black, config reset theme
+```
+
+| Command | What it does |
+| --- | --- |
+| `apps` | Lists the apps with name, bundle ID, version, encryption, team, signer, developer. Filters as in the window: `--include-system`, `--non-apple`, `--encrypted-only`, `--search TEXT` (defaults from the settings) |
+| `extract`, `decrypt` | Original or decrypted IPAs. Pick apps by bundle ID, `--all`, `--search`, `--unextracted` (no IPA in the output folders yet) or `--partial` (decrypted IPA still partly encrypted). `-o DIR`, `--name TEMPLATE`, `--overwrite`, `--skip-existing`, `--json` |
+| `decrypt` options | `--mode native` / `frida-direct` / `frida-ios-dump`, `--helper auto` / `mremap` / `memory`, `--frida-port`, `--dump-dir`, `--install-frida`, `--repair` / `--no-repair`, `--close-after` / `--keep-open`, `--restart-frida` / `--no-restart-frida` (all default to the settings); `--helper mremap` is refused on iOS 16 and later |
+| `verify` | Checks every executable of IPAs, like `ipa_verify.py` |
+| `install-frida`, `install-frida-ios-dump` | What the window's *Install Frida dependencies* and *Install frida-ios-dump* buttons do |
+| `config` | `show`, `set KEY VALUE`, `reset KEY...`, `keys`, `path`: the same settings as the window, including the theme |
+
+The SSH password comes from `--password`, the `IPA_PASSWORD` variable, the saved one (*Remember password*), or a prompt. Progress goes to stderr, results to stdout. Files that exist are replaced only with `--overwrite` (or after asking in a terminal). Ctrl+C finishes the file in progress and stops; a second Ctrl+C quits at once. Exit status: 0 everything done, 1 something failed, 2 wrong usage or no connection, 3 done but some IPAs are partly encrypted, 130 cancelled. The messages of the extraction itself follow the language setting (`--lang` overrides it); the command line's own messages and help are English.
 
 ## Limitations
 
@@ -118,7 +144,8 @@ Each language is a JSON file in `locales/` named by its language tag, e.g. `ja.j
 
 | File | Purpose |
 | --- | --- |
-| `ipa_extractor.py` | Tkinter GUI |
+| `ipa_extractor.py` | Tkinter GUI, and the engine (`DumpEngine`) that copies and decrypts apps, shared with the command line |
+| `ipa_cli.py` | Command line: the same features without the window |
 | `ipa_extractor.bat`, `ipa_extractor.sh` | Launchers for Windows and Linux/macOS |
 | `device_apps.py` | Lists installed apps over SSH/SFTP with the names the Home screen shows |
 | `ipa_extract.py` | Streams an installed bundle over SSH into an IPA without decrypting it |

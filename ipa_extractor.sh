@@ -1,7 +1,8 @@
 #!/bin/sh
 # Launch IPA Extractor on Linux or macOS.
 # Packages go into ./.venv (created on first run), so the system Python is never modified.
-cd "$(dirname "$0")" || exit 1
+HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
+cd "$HERE" || exit 1
 
 if [ ! -x .venv/bin/python ]; then
     PYTHON=$(command -v python3 || command -v python)
@@ -23,4 +24,9 @@ if [ ! -x .venv/bin/python ]; then
     fi
 fi
 
-exec .venv/bin/python ipa_extractor.py "$@"
+# The window runs from the tool's folder; the command line runs where it was called from, so that relative
+# paths in its arguments (-o out, verify app.ipa) mean what the caller meant.
+if [ $# -gt 0 ]; then
+    cd "$OLDPWD" || exit 1
+fi
+exec "$HERE/.venv/bin/python" "$HERE/ipa_extractor.py" "$@"
