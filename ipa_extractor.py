@@ -38,6 +38,7 @@ import ipa_extract
 import ipa_repair
 import ipa_verify
 import i18n
+import native_decrypt
 import remote
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -57,7 +58,31 @@ FRIDA_IOS_DUMP_URL = 'https://github.com/AloneMonkey/frida-ios-dump'
 FRIDA_SERVER_PATHS = ('/usr/sbin/frida-server', '/var/jb/usr/sbin/frida-server')
 
 CHECKED, UNCHECKED = '☑', '☐'
-COLORS = dict(ok='#1a7f37', busy='#d4a72c', error='#cf222e', idle='#8c959f')
+# UI colours per theme (the theme setting). Light keeps the platform's native look; dark and black
+# restyle ttk's "clam" theme. PALETTE holds the current one and is changed in place.
+THEME_LIGHT, THEME_DARK, THEME_BLACK = 'light', 'dark', 'black'
+THEMES = (THEME_LIGHT, THEME_DARK, THEME_BLACK)
+_STATUS_LIGHT = dict(ok='#1a7f37', busy='#d4a72c', error='#cf222e', idle='#8c959f',
+                     partial='#bc4c00', running='#0969da', queued='#9a6700')
+_STATUS_DARK = dict(ok='#3fb950', busy='#d29922', error='#f85149', idle='#6e7681',
+                    partial='#f0883e', running='#58a6ff', queued='#d29922')
+PALETTES = {
+    THEME_LIGHT: dict(bg='#f0f0f0', fg='#000000', field='#ffffff', button='#e1e1e1', hover='#e5f1fb', border='#adadad',
+                      select='#0078d7', muted='#57606a', checked='#ddf4ff', tooltip='#ffffe0', accent='#0078d7',
+                      **_STATUS_LIGHT),
+    THEME_DARK: dict(bg='#202020', fg='#e6e6e6', field='#2b2b2b', button='#333333', hover='#404040', border='#4a4a4a',
+                     select='#264f78', muted='#9da5ae', checked='#1c3a57', tooltip='#2d2d2d', accent='#2f81f7',
+                     **_STATUS_DARK),
+    THEME_BLACK: dict(bg='#000000', fg='#e6e6e6', field='#000000', button='#141414', hover='#262626', border='#3a3a3a',
+                      select='#1b3d63', muted='#8b949e', checked='#0d2a47', tooltip='#111111', accent='#2f81f7',
+                      **_STATUS_DARK),
+}
+PALETTE = dict(PALETTES[THEME_LIGHT])
+
+
+def theme_setting(value):
+    """A theme name from a settings file or a variable; anything unknown is the default, light."""
+    return value if value in THEMES else THEME_LIGHT
 # Named Tk fonts the UI uses; all follow the font chosen in Settings.
 UI_FONTS = ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont', 'TkCaptionFont',
             'TkSmallCaptionFont', 'TkIconFont', 'TkTooltipFont')
@@ -65,19 +90,20 @@ UI_FONTS = ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont', 'TkCap
 SUN_VALLEY_FONTS = ('SunValleyBodyFont', 'SunValleyBodyStrongFont', 'SunValleyCaptionFont')
 DEFAULT_FONT_SIZE = 13 if IS_MACOS else 10
 # Settings files keep only values that differ from these, so new defaults reach existing users.
-# Ways to make a decrypted IPA (the dump_method setting). Both need frida-server; the names leave room
-# for methods that do not.
+# Ways to make a decrypted IPA (the dump_method setting). The first two need frida-server.
 METHOD_FRIDA_DIRECT = 'frida_direct'        # R4: decrypt the installed files, the app never runs
 METHOD_FRIDA_IOS_DUMP = 'frida_ios_dump'    # run the app and dump it with frida-ios-dump
-DUMP_METHODS = (METHOD_FRIDA_DIRECT, METHOD_FRIDA_IOS_DUMP)
+METHOD_NATIVE = 'native'                    # the same as R4 with helper programs on the device, no Frida
+DUMP_METHODS = (METHOD_FRIDA_DIRECT, METHOD_FRIDA_IOS_DUMP, METHOD_NATIVE)
 
 DEFAULTS = dict(
     host='', port=22, user='', frida_port=27042,
     user_only=True, non_apple=False, encrypted_only=False,
     outdir=os.path.join(script_dir, 'output_decrypted'), extract_dir=os.path.join(script_dir, 'output_encrypted'),
     separate_dirs=True, name_decrypted=app_info.DEFAULT_DECRYPTED_NAME, name_original=app_info.DEFAULT_ORIGINAL_NAME,
-    dump_dir=DEFAULT_DUMP_DIR, close_after=True, restart_frida=True, repair=True, dump_method=METHOD_FRIDA_DIRECT,
-    lang=i18n.AUTO, font='', font_size=DEFAULT_FONT_SIZE,
+    dump_dir=DEFAULT_DUMP_DIR, close_after=True, restart_frida=True, repair=True, dump_method=METHOD_NATIVE,
+    frida_method=METHOD_FRIDA_DIRECT, native_helper=native_decrypt.AUTO,
+    lang=i18n.AUTO, font='', font_size=DEFAULT_FONT_SIZE, theme=THEME_LIGHT,
 )
 
 
@@ -315,7 +341,14 @@ def per_slice_copies(options):
 
 def dump_method_setting(value):
     """The saved decryption method, or the default when it is missing or unknown."""
-    return value if value in DUMP_METHODS else METHOD_FRIDA_DIRECT
+    return value if value in DUMP_METHODS else DEFAULTS['dump_method']
+
+
+def frida_method_setting(value, method):
+    """The Frida mode to return to when the user switches from the native helpers to Frida: the saved one, else the
+    active method if it is one, else the direct mode."""
+    frida = (METHOD_FRIDA_DIRECT, METHOD_FRIDA_IOS_DUMP)
+    return value if value in frida else method if method in frida else METHOD_FRIDA_DIRECT
 
 
 def frida_launchd_pids(launchctl_list):
@@ -436,17 +469,23 @@ class Indented:
         self.text = text
 
 
+# Letters of the scripts whose words are not separated by spaces: Thai, Japanese kana and Chinese characters.
+# Everything else (accented Latin, Cyrillic, Greek, Hangul, ...) is written in words.
+UNSPACED = '฀-๿぀-ヿ㐀-鿿豈-﫿'
+WRAP_TOKEN = re.compile(r'(?:[^\W' + UNSPACED + r']|[.\-/\\:@{}()«»„“”‘’"])+|\s+|.')
+
+
 def wrap_text(text, width, font='TkDefaultFont'):
     """Insert line breaks so text fits width pixels.
 
-    Tk only breaks lines at spaces, which Chinese and Japanese text rarely has, so this
-    breaks between any two characters except inside runs of Latin letters and digits.
+    Tk only breaks lines at spaces, which Chinese, Japanese and Thai text rarely has, so this
+    breaks between any two characters of those scripts, and otherwise only between words.
     """
     font = tkfont.nametofont(font) if isinstance(font, str) else font
     lines = []
     for paragraph in text.split('\n'):
         line = ''
-        for token in re.findall(r'[\w.\-/\\:@{}()]+|\s+|.', paragraph, re.ASCII):
+        for token in WRAP_TOKEN.findall(paragraph):
             if line.strip() and font.measure(line + token) > width:
                 lines.append(line.rstrip())
                 line = token.lstrip()
@@ -489,8 +528,8 @@ class Tooltip:
         self.window = tk.Toplevel(self.widget)
         self.window.wm_overrideredirect(True)
         self.window.wm_geometry('+{}+{}'.format(x, y))
-        tk.Label(self.window, text=wrap_text(self.text, 420), justify='left', background='#ffffe0',
-                 relief='solid', borderwidth=1, padx=6, pady=4).pack()
+        tk.Label(self.window, text=wrap_text(self.text, 420), justify='left', background=PALETTE['tooltip'],
+                 foreground=PALETTE['fg'], relief='solid', borderwidth=1, padx=6, pady=4).pack()
 
     def hide(self, event=None):
         if self.window is not None:
@@ -526,6 +565,7 @@ class DumpGUI(tk.Tk):
         self.lang = i18n.resolve(self.locales, self.lang_setting)
         self.ssh_state = (Text('state_idle'), 'idle')
         self.frida_state = (Text('state_unused'), 'idle')
+        self.helper_warned = False
         self.overall = (0, None)
         self.var_host = tk.StringVar(value=c['host'])
         self.var_port = tk.StringVar(value=str(c['port']))
@@ -544,9 +584,13 @@ class DumpGUI(tk.Tk):
         self.var_restart_frida = tk.BooleanVar(value=c['restart_frida'])
         self.var_repair = tk.BooleanVar(value=c['repair'])
         self.var_dump_method = tk.StringVar(value=dump_method_setting(c['dump_method']))
+        self.var_native_helper = tk.StringVar(value=native_decrypt.setting(c['native_helper']))
+        self.frida_method = frida_method_setting(c['frida_method'], self.var_dump_method.get())
+        self.var_family = tk.StringVar(value='native' if self.var_dump_method.get() == METHOD_NATIVE else 'frida')
         self.var_name_decrypted = tk.StringVar(value=c['name_decrypted'])
         self.var_name_original = tk.StringVar(value=c['name_original'])
         self.var_separate_dirs = tk.BooleanVar(value=c['separate_dirs'])
+        self.var_theme = tk.StringVar(value=theme_setting(c['theme']))
         self.var_font = tk.StringVar(value=c['font'])  # '' follows the language
         self.var_font_size = tk.StringVar(value=str(c['font_size']))
         self.var_lang = tk.StringVar()
@@ -554,7 +598,6 @@ class DumpGUI(tk.Tk):
         self.style = ttk.Style(self)
         self.apply_theme()
         self.apply_icon()
-        self.style.configure('TNotebook.Tab', padding=(18, 7))
         self.installed_fonts = sorted(f for f in tkfont.families(self) if not f.startswith('@'))
         # The platform's UI font (Segoe UI on Windows, the system font on macOS), before Settings change it.
         self.system_font = tkfont.nametofont('TkDefaultFont').actual('family')
@@ -599,23 +642,104 @@ class DumpGUI(tk.Tk):
                             'if {"%A" eq "."} {ttk::entry::Insert %W %A} else {ttk::entry::Delete %W}')
 
     def apply_theme(self):
-        """Native theme on Windows and macOS; on Linux, Sun Valley (sv-ttk) instead of Tk's dated default."""
-        if IS_WINDOWS:
-            self.style.theme_use('vista')
-        elif not IS_MACOS:
+        """Light: native theme on Windows and macOS, Sun Valley (sv-ttk) on Linux instead of Tk's dated
+        default. Dark and black: "clam" restyled with the palette (black is a pure black background)."""
+        name = theme_setting(self.var_theme.get())
+        PALETTE.clear()
+        PALETTE.update(PALETTES[name])
+        if name == THEME_LIGHT:
+            if IS_WINDOWS:
+                self.style.theme_use('vista')
+            elif IS_MACOS:
+                self.style.theme_use('aqua')
+            else:
+                try:
+                    import sv_ttk
+                    sv_ttk.set_theme('light', self)
+                except ImportError:
+                    self.style.theme_use('clam')
+            # Classic Tk widgets (Text, Canvas) do not follow ttk themes. Sun Valley does not report its
+            # colours through style lookups, so read its palette directly.
             try:
-                import sv_ttk
-                sv_ttk.set_theme('light', self)
-            except ImportError:
-                self.style.theme_use('clam')
-        # Classic Tk widgets (Text, Canvas) do not follow ttk themes. Sun Valley does not report its
-        # colours through style lookups, so read its palette directly.
-        try:
-            background = self.tk.call('set', '::ttk::theme::sv_light::colors(-bg)')
-        except tk.TclError:
-            background = self.style.lookup('TFrame', 'background')
-        self.theme_background = background or self.cget('background')
+                background = self.tk.call('set', '::ttk::theme::sv_light::colors(-bg)')
+            except tk.TclError:
+                background = self.style.lookup('TFrame', 'background')
+            self.theme_background = background or self.cget('background')
+            if getattr(self, 'dark_options', False):
+                self.option_clear()
+                self.dark_options = False
+        else:
+            self._style_dark(PALETTE)
+            self.theme_background = PALETTE['bg']
         self.configure(background=self.theme_background)
+        self.style.configure('TNotebook.Tab', padding=(18, 7))
+        if hasattr(self, 'installed_fonts'):
+            self.apply_fonts()
+
+    def _style_dark(self, p):
+        style = self.style
+        style.theme_use('clam')
+        style.configure('.', background=p['bg'], foreground=p['fg'], fieldbackground=p['field'],
+                        bordercolor=p['border'], lightcolor=p['border'], darkcolor=p['border'],
+                        troughcolor=p['field'], insertcolor=p['fg'], selectbackground=p['select'],
+                        selectforeground=p['fg'], focuscolor=p['bg'], arrowcolor=p['fg'])
+        style.map('.', foreground=[('disabled', p['muted'])], background=[('disabled', p['bg']), ('active', p['bg'])])
+        style.configure('TButton', background=p['button'], padding=(8, 3))
+        style.map('TButton', background=[('disabled', p['bg']), ('pressed', p['select']), ('active', p['hover'])])
+        style.configure('TEntry', fieldbackground=p['field'], padding=2)
+        style.map('TEntry', fieldbackground=[('disabled', p['bg'])])
+        style.configure('TSpinbox', fieldbackground=p['field'], background=p['button'])
+        style.map('TSpinbox', fieldbackground=[('disabled', p['bg'])])
+        style.configure('TCombobox', fieldbackground=p['field'], background=p['button'])
+        style.map('TCombobox', fieldbackground=[('disabled', p['bg']), ('readonly', p['field'])],
+                  foreground=[('disabled', p['muted'])], selectbackground=[('readonly', p['field'])],
+                  selectforeground=[('readonly', p['fg'])])
+        for kind in ('TCheckbutton', 'TRadiobutton'):
+            style.configure(kind, indicatorbackground=p['field'], indicatorforeground=p['fg'],
+                            upperbordercolor=p['border'], lowerbordercolor=p['border'])
+            style.map(kind, indicatorbackground=[('disabled', p['bg']), ('pressed', p['hover']), ('!disabled', p['field'])],
+                      indicatorforeground=[('disabled', p['muted'])])
+        style.configure('TNotebook', background=p['bg'], bordercolor=p['border'])
+        style.configure('TNotebook.Tab', background=p['button'], foreground=p['fg'])
+        style.map('TNotebook.Tab', background=[('selected', p['bg']), ('active', p['hover'])])
+        style.configure('Treeview', background=p['field'], fieldbackground=p['field'], foreground=p['fg'])
+        style.map('Treeview', background=[('selected', p['select'])], foreground=[('selected', p['fg'])])
+        style.configure('Treeview.Heading', background=p['button'], foreground=p['fg'], relief='flat')
+        style.map('Treeview.Heading', background=[('active', p['hover'])])
+        style.configure('TScrollbar', background=p['button'], troughcolor=p['bg'], bordercolor=p['bg'],
+                        arrowcolor=p['fg'])
+        style.map('TScrollbar', background=[('active', p['hover'])])
+        style.configure('TProgressbar', background=p['accent'], troughcolor=p['field'])
+        style.configure('TLabelframe', background=p['bg'], bordercolor=p['border'])
+        style.configure('TLabelframe.Label', background=p['bg'], foreground=p['fg'])
+        style.configure('TSeparator', background=p['border'])
+        style.configure('Sash', background=p['border'])
+        # Classic Tk widgets and the combobox drop-down list follow the option database.
+        for pattern, value in (('*Text.background', p['field']), ('*Text.foreground', p['fg']),
+                               ('*Text.insertBackground', p['fg']), ('*Text.selectBackground', p['select']),
+                               ('*Text.selectForeground', p['fg']),
+                               ('*Menu.background', p['field']), ('*Menu.foreground', p['fg']),
+                               ('*Menu.activeBackground', p['select']), ('*Menu.activeForeground', p['fg']),
+                               ('*TCombobox*Listbox.background', p['field']),
+                               ('*TCombobox*Listbox.foreground', p['fg']),
+                               ('*TCombobox*Listbox.selectBackground', p['select']),
+                               ('*TCombobox*Listbox.selectForeground', p['fg'])):
+            self.option_add(pattern, value)
+        self.dark_options = True
+
+    def style_titlebar(self, window):
+        """Dark title bar on Windows 10 and 11 for the dark themes; other systems keep theirs."""
+        if not IS_WINDOWS:
+            return
+        try:
+            import ctypes
+            window.update_idletasks()
+            handle = ctypes.windll.user32.GetParent(window.winfo_id())
+            value = ctypes.c_int(0 if theme_setting(self.var_theme.get()) == THEME_LIGHT else 1)
+            for attribute in (20, 19):   # DWMWA_USE_IMMERSIVE_DARK_MODE, and its number before Windows 10 20H1
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(handle, attribute, ctypes.byref(value), ctypes.sizeof(value))
+        except (OSError, AttributeError, tk.TclError):
+            pass
 
     def auto_font(self):
         """First installed font the language prefers (locale "_fonts"), else the platform's UI font."""
@@ -676,6 +800,7 @@ class DumpGUI(tk.Tk):
         indicators.grid(row=1, column=0, columnspan=12, padx=2, pady=(0, 6), sticky='w')
         self.ssh_dot, self.ssh_label = self._indicator(indicators, 'SSH')
         self.frida_dot, self.frida_label = self._indicator(indicators, 'Frida')
+        self.show_frida_indicator()
 
         dirs = ttk.Frame(root)
         dirs.pack(fill='x', padx=8, pady=(4, 0))
@@ -722,7 +847,7 @@ class DumpGUI(tk.Tk):
         panes.pack(fill='both', expand=True, padx=8, pady=4)
 
         table = ttk.Frame(panes)
-        WrapLabel(table, text=self.t('hint'), foreground='#57606a', justify='left').pack(fill='x', pady=(0, 2))
+        WrapLabel(table, text=self.t('hint'), foreground=PALETTE['muted'], justify='left').pack(fill='x', pady=(0, 2))
         self.tree = ttk.Treeview(table, columns=[c[0] for c in COLUMNS], show='headings',
                                  selectmode='extended')
         for key, width in COLUMNS:
@@ -736,16 +861,16 @@ class DumpGUI(tk.Tk):
         self.tree.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
         # Shown over the empty table while the app list is being read.
-        self.lbl_tree_busy = tk.Label(self.tree, text=self.t('tree_loading'), foreground='#57606a',
+        self.lbl_tree_busy = tk.Label(self.tree, text=self.t('tree_loading'), foreground=PALETTE['muted'],
                                      background=ttk.Style().lookup('Treeview', 'background') or 'white',
                                      borderwidth=0)
-        self.tree.tag_configure('checked', background='#ddf4ff')
-        self.tree.tag_configure('done', foreground=COLORS['ok'])
-        self.tree.tag_configure('failed', foreground=COLORS['error'])
-        self.tree.tag_configure('partial', foreground='#bc4c00')
-        self.tree.tag_configure('running', foreground='#0969da')
-        self.tree.tag_configure('queued', foreground='#9a6700')
-        self.tree.tag_configure('offloaded', foreground=COLORS['idle'])
+        self.tree.tag_configure('checked', background=PALETTE['checked'])
+        self.tree.tag_configure('done', foreground=PALETTE['ok'])
+        self.tree.tag_configure('failed', foreground=PALETTE['error'])
+        self.tree.tag_configure('partial', foreground=PALETTE['partial'])
+        self.tree.tag_configure('running', foreground=PALETTE['running'])
+        self.tree.tag_configure('queued', foreground=PALETTE['queued'])
+        self.tree.tag_configure('offloaded', foreground=PALETTE['idle'])
         self.tree.bind('<<TreeviewSelect>>', lambda e: self.show_details())
         self.tree.bind('<Button-1>', self.on_tree_click)
         self.tree.bind('<Double-1>', self.on_tree_double_click)
@@ -808,6 +933,8 @@ class DumpGUI(tk.Tk):
         window.title('{} – Settings'.format(APP_NAME))
         window.transient(self)
         window.resizable(True, False)
+        window.configure(background=self.theme_background)
+        self.style_titlebar(window)
         outer = ttk.Frame(window, padding=10)
         outer.pack(fill='both', expand=True)
         tabs = self.settings_tabs = ttk.Notebook(outer)
@@ -846,6 +973,13 @@ class DumpGUI(tk.Tk):
         size.grid(row=2, column=1, sticky='w', padx=6)
         size.bind('<Return>', font_chosen)
         size.bind('<FocusOut>', font_chosen)
+        self.theme_choices = {self.t('theme_' + name): name for name in THEMES}
+        theme_name = tk.StringVar(value=self.t('theme_' + theme_setting(self.var_theme.get())))
+        ttk.Label(general, text=self.t('theme')).grid(row=3, column=0, sticky='w', pady=4)
+        themes = ttk.Combobox(general, textvariable=theme_name, values=list(self.theme_choices), state='readonly',
+                              width=24)
+        themes.grid(row=3, column=1, sticky='w', padx=6)
+        themes.bind('<<ComboboxSelected>>', lambda e: self.change_theme(self.theme_choices[theme_name.get()]))
 
         extract = ttk.Frame(tabs, padding=12)
         tabs.add(extract, text=self.t('tab_extract'))
@@ -862,39 +996,61 @@ class DumpGUI(tk.Tk):
                 row=row, column=2)
             fields = ttk.Frame(names)
             fields.grid(row=row + 1, column=1, sticky='w', padx=4, pady=(2, 0))
-            ttk.Label(fields, text=self.t('name_insert'), foreground='#57606a').pack(side='left')
+            ttk.Label(fields, text=self.t('name_insert'), foreground=PALETTE['muted']).pack(side='left')
             for field in app_info.NAME_FIELDS:
                 ttk.Button(fields, text=self.t('field_' + field), width=-1,
                            command=lambda e=entry, f=field: self._insert_field(e, f)).pack(side='left', padx=1)
-            preview = ttk.Label(names, foreground='#57606a')
+            preview = ttk.Label(names, foreground=PALETTE['muted'])
             preview.grid(row=row + 2, column=1, sticky='w', padx=4, pady=(2, 8))
             update = lambda *a, v=var, l=preview, k=kind: self._update_name_preview(v, l, k)
             var.trace_add('write', update)
             update()
             row += 3
         names.columnconfigure(1, weight=1)
-        WrapLabel(names, text=self.t('name_help'), foreground='#57606a', justify='left').grid(
+        WrapLabel(names, text=self.t('name_help'), foreground=PALETTE['muted'], justify='left').grid(
             row=row, column=0, columnspan=3, sticky='we')
         ttk.Checkbutton(extract, text=self.t('separate_dirs'), variable=self.var_separate_dirs,
                         command=self._folders_changed).pack(anchor='w', pady=(10, 0))
 
-        frida = ttk.Frame(tabs, padding=12)
-        tabs.add(frida, text=self.t('tab_frida'))
-        WrapLabel(frida, text=self.t('frida_help'), foreground='#57606a', justify='left').grid(
+        frida = ttk.Frame(tabs, padding=12)     # the Decryption tab
+        tabs.add(frida, text=self.t('tab_decrypt'))
+        WrapLabel(frida, text=self.t('decrypt_help'), foreground=PALETTE['muted'], justify='left').grid(
             row=0, column=0, columnspan=3, sticky='we', pady=(0, 8))
-        # Decryption method first: the options below each method only apply to it.
         ttk.Label(frida, text=self.t('dump_method')).grid(row=1, column=0, columnspan=3, sticky='w')
-        # R4 (the default): copy the app and decrypt its files without running it.
-        direct_option = ttk.Radiobutton(frida, text=self.t('dump_method_frida_direct'), value=METHOD_FRIDA_DIRECT,
+        # Two kinds of method: helper programs on the device (no Frida), and Frida with its two modes. The method
+        # setting itself keeps one of three values; the family only decides which group of them is in use.
+        self.var_family.set('native' if self.native_method() else 'frida')
+        native_family = ttk.Radiobutton(frida, text=self.t('family_native'), value='native', variable=self.var_family)
+        native_family.grid(row=2, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        Tooltip(native_family, self.t('family_native_tip'))
+        native_box = ttk.Frame(frida)
+        native_box.grid(row=3, column=0, columnspan=3, sticky='we', padx=(24, 0))
+        native_widgets = []
+        for row, (value, key) in enumerate(((native_decrypt.AUTO, 'native_auto'), (native_decrypt.MREMAP, 'native_mremap'),
+                                            (native_decrypt.MEMORY, 'native_memory'))):
+            option = ttk.Radiobutton(native_box, text=self.t(key), value=value, variable=self.var_native_helper)
+            option.grid(row=row, column=0, sticky='w', pady=(3, 0))
+            Tooltip(option, self.t(key + '_tip'))
+            native_widgets.append(option)
+
+        frida_family = ttk.Radiobutton(frida, text=self.t('family_frida'), value='frida', variable=self.var_family)
+        frida_family.grid(row=4, column=0, columnspan=3, sticky='w', pady=(14, 0))
+        Tooltip(frida_family, self.t('family_frida_tip'))
+        frida_box = ttk.Frame(frida)
+        frida_box.grid(row=5, column=0, columnspan=3, sticky='we', padx=(24, 0))
+        frida_box.columnconfigure(1, weight=1)
+        frida_widgets = []
+        # R4: copy the app and decrypt its files without running it.
+        direct_option = ttk.Radiobutton(frida_box, text=self.t('dump_method_frida_direct'), value=METHOD_FRIDA_DIRECT,
                                         variable=self.var_dump_method)
-        direct_option.grid(row=2, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        direct_option.grid(row=0, column=0, columnspan=3, sticky='w', pady=(3, 0))
         Tooltip(direct_option, self.t('dump_method_frida_direct_tip'))
-        dump_option = ttk.Radiobutton(frida, text=self.t('dump_method_frida_ios_dump'), value=METHOD_FRIDA_IOS_DUMP,
+        dump_option = ttk.Radiobutton(frida_box, text=self.t('dump_method_frida_ios_dump'), value=METHOD_FRIDA_IOS_DUMP,
                                       variable=self.var_dump_method)
-        dump_option.grid(row=3, column=0, columnspan=3, sticky='w', pady=(8, 0))
+        dump_option.grid(row=1, column=0, columnspan=3, sticky='w', pady=(8, 0))
         Tooltip(dump_option, self.t('dump_method_frida_ios_dump_tip'))
-        dump_box = ttk.Frame(frida)
-        dump_box.grid(row=4, column=0, columnspan=3, sticky='we', padx=(24, 0))
+        dump_box = ttk.Frame(frida_box)
+        dump_box.grid(row=2, column=0, columnspan=3, sticky='we', padx=(24, 0))
         dump_label = ttk.Label(dump_box, text=self.t('dump_dir'))
         dump_label.grid(row=0, column=0, sticky='w')
         dump_entry = ttk.Entry(dump_box, textvariable=self.var_dump_dir, width=44)
@@ -917,19 +1073,22 @@ class DumpGUI(tk.Tk):
         close_after.grid(row=3, column=0, columnspan=3, sticky='w', pady=(4, 0))
         dump_widgets += [status, install_dump, repair, close_after]
         dump_box.columnconfigure(1, weight=1)
-        ttk.Separator(frida).grid(row=5, column=0, columnspan=3, sticky='we', pady=12)
-        # Both methods talk to frida-server, which can crash or hang with either.
-        ttk.Checkbutton(frida, text=self.t('restart_frida'), variable=self.var_restart_frida).grid(
-            row=6, column=0, columnspan=3, sticky='w', pady=(0, 8))
-        ttk.Label(frida, text=self.t('frida_port')).grid(row=7, column=0, sticky='w')
-        ttk.Entry(frida, textvariable=self.var_frida_port, width=8).grid(row=7, column=1, sticky='w', padx=4)
-        ttk.Button(frida, text=self.t('install'), command=self.install_dependencies).grid(
-            row=8, column=0, columnspan=3, sticky='w', pady=(8, 0))
+        ttk.Separator(frida_box).grid(row=3, column=0, columnspan=3, sticky='we', pady=12)
+        # Both Frida methods talk to frida-server, which can crash or hang with either.
+        restart = ttk.Checkbutton(frida_box, text=self.t('restart_frida'), variable=self.var_restart_frida)
+        restart.grid(row=4, column=0, columnspan=3, sticky='w', pady=(0, 8))
+        port_label = ttk.Label(frida_box, text=self.t('frida_port'))
+        port_label.grid(row=5, column=0, sticky='w')
+        port_entry = ttk.Entry(frida_box, textvariable=self.var_frida_port, width=8)
+        port_entry.grid(row=5, column=1, sticky='w', padx=4)
+        install = ttk.Button(frida_box, text=self.t('install'), command=self.install_dependencies)
+        install.grid(row=6, column=0, columnspan=3, sticky='w', pady=(8, 0))
+        frida_widgets += [direct_option, dump_option, restart, port_label, port_entry, install]
 
         def update_status(*args):
             state = dump_dir_status(self.var_dump_dir.get().strip())
             status.configure(text=self.t('dump_dir_' + state),
-                             foreground=COLORS['ok'] if state == 'ok' else COLORS['error'])
+                             foreground=PALETTE['ok'] if state == 'ok' else PALETTE['error'])
             # A missing or unset folder can be fixed by downloading frida-ios-dump.
             if state in ('empty', 'missing'):
                 install_dump.pack(side='left', padx=8)
@@ -937,30 +1096,52 @@ class DumpGUI(tk.Tk):
                 install_dump.pack_forget()
 
         def update_method(*args):
-            # Options of frida-ios-dump are greyed out (and unused) with the direct method.
-            enabled = not self.direct_method()
+            # What does not belong to the chosen method is greyed out (and unused): the choice of helper with the
+            # Frida modes, everything of Frida with the native helpers, and the options of frida-ios-dump with
+            # the other Frida mode.
+            method = self.var_dump_method.get()
+            if method in (METHOD_FRIDA_DIRECT, METHOD_FRIDA_IOS_DUMP):
+                self.frida_method = method
+            self.var_family.set('native' if method == METHOD_NATIVE else 'frida')
+            native = method == METHOD_NATIVE
+            for widget in native_widgets:
+                widget.state(['disabled'] if not native else ['!disabled'])
+            for widget in frida_widgets:
+                widget.state(['!disabled'] if not native else ['disabled'])
+            self.show_frida_indicator()
+            dump_enabled = method == METHOD_FRIDA_IOS_DUMP
             for widget in dump_widgets:
-                widget.state(['!disabled'] if enabled else ['disabled'])
-            status.configure(foreground=status.cget('foreground') if enabled else COLORS['idle'])
-            if enabled:
+                widget.state(['!disabled'] if dump_enabled else ['disabled'])
+            status.configure(foreground=status.cget('foreground') if dump_enabled else PALETTE['idle'])
+            if dump_enabled:
                 update_status()
+
+        def update_family(*args):
+            native = self.var_family.get() == 'native'
+            if native and self.var_dump_method.get() != METHOD_NATIVE:
+                self.var_dump_method.set(METHOD_NATIVE)
+            elif not native and self.var_dump_method.get() == METHOD_NATIVE:
+                self.var_dump_method.set(self.frida_method)
 
         self.var_dump_dir.trace_add('write', update_status)
         self.var_dump_method.trace_add('write', update_method)
+        self.var_family.trace_add('write', update_family)
         update_status()
         update_method()
         frida.columnconfigure(1, weight=1)
         tabs.select(tab)
 
         def close():
-            for var in (self.var_name_decrypted, self.var_name_original, self.var_dump_dir, self.var_dump_method):
+            for var in (self.var_name_decrypted, self.var_name_original, self.var_dump_dir, self.var_dump_method,
+                        self.var_native_helper, self.var_family):
                 for mode, callback in var.trace_info():
                     var.trace_remove(mode, callback)
             self._save_config()
             window.destroy()
             self.show_details()
             # A folder fixed in Settings takes effect without reconnecting.
-            if (self.ssh is not None and self.frida_version is None and not self.frida_connecting
+            if (self.ssh is not None and self.needs_frida() and self.frida_version is None
+                    and not self.frida_connecting
                     and (self.direct_method()
                          or dump_dir_status(self.var_dump_dir.get().strip()) == 'ok')):
                 self.connect_frida()
@@ -985,9 +1166,9 @@ class DumpGUI(tk.Tk):
         try:
             name = app_info.format_ipa_name(var.get(), app['name'], app['bundle'], app['version'],
                                             app['build'], kind)
-            label.configure(text=self.t('name_preview', file=name + '.ipa'), foreground='#57606a')
+            label.configure(text=self.t('name_preview', file=name + '.ipa'), foreground=PALETTE['muted'])
         except app_info.NameTemplateError as error:
-            label.configure(text=self.t('name_bad', error=self.name_error_text(error)), foreground=COLORS['error'])
+            label.configure(text=self.t('name_bad', error=self.name_error_text(error)), foreground=PALETTE['error'])
 
     def name_error_text(self, error):
         key, params = error.args
@@ -1031,19 +1212,42 @@ class DumpGUI(tk.Tk):
             if reopen:
                 self.open_settings()
 
+    def change_theme(self, name):
+        if name == theme_setting(self.var_theme.get()):
+            return
+        self.var_theme.set(name)
+        self._save_config()
+        reopen = self.settings_window is not None and self.settings_window.winfo_exists()
+        tab = self.settings_tabs.index('current') if reopen else 0
+        if reopen:
+            self.settings_close()
+        self.apply_theme()
+        self.style_titlebar(self)
+        self._build_ui()
+        if reopen:
+            self.open_settings(tab=tab)
+
     def _indicator(self, parent, title):
         frame = ttk.Frame(parent)
         frame.pack(side='left', padx=(6, 18))
         dot = tk.Canvas(frame, width=14, height=14, highlightthickness=0, background=self.theme_background)
-        dot.create_oval(2, 2, 12, 12, fill=COLORS['idle'], outline='', tags='dot')
+        dot.create_oval(2, 2, 12, 12, fill=PALETTE['idle'], outline='', tags='dot')
         dot.pack(side='left')
         label = ttk.Label(frame)
         label.pack(side='left', padx=2)
         label.title = title
         return dot, label
 
+    def show_frida_indicator(self):
+        """The Frida status beside SSH is only there while a Frida method is chosen."""
+        frame = self.frida_dot.master
+        if self.native_method():
+            frame.pack_forget()
+        else:
+            frame.pack(side='left', padx=(6, 18))
+
     def _set_indicator(self, dot, label, text, color):
-        dot.itemconfigure('dot', fill=COLORS[color])
+        dot.itemconfigure('dot', fill=PALETTE[color])
         label.configure(text='{}: {}'.format(label.title, self.render(text)))
 
     def set_ssh_state(self, text, color):
@@ -1087,10 +1291,11 @@ class DumpGUI(tk.Tk):
                     encrypted_only=self.var_encrypted_only.get(),
                     dump_dir=self.var_dump_dir.get().strip(), close_after=self.var_close_after.get(),
                     restart_frida=self.var_restart_frida.get(), repair=self.var_repair.get(),
-                    dump_method=self.var_dump_method.get(),
+                    dump_method=self.var_dump_method.get(), native_helper=self.var_native_helper.get(),
+                    frida_method=self.frida_method,
                     name_decrypted=self.var_name_decrypted.get(), name_original=self.var_name_original.get(),
                     separate_dirs=self.var_separate_dirs.get(), font=self.var_font.get(),
-                    font_size=self.var_font_size.get())
+                    font_size=self.var_font_size.get(), theme=self.var_theme.get())
         data = {key: value for key, value in data.items() if str(value) != str(DEFAULTS[key])}
         if self.var_remember.get():
             data['password'] = self.var_password.get()
@@ -1195,11 +1400,28 @@ class DumpGUI(tk.Tk):
         self.btn_connect.configure(state='normal', text=self.t('disconnect'))
         self.log(Text('log_ssh_ok'))
         self.load_apps()
-        if self.direct_method() or dump_dir_status(self.var_dump_dir.get().strip()) == 'ok':
+        if self.native_method():
+            self.set_frida_state(Text('state_unused'), 'idle')
+            self.run_background(self._read_ios_version, self.generation, client)
+        elif self.direct_method() or dump_dir_status(self.var_dump_dir.get().strip()) == 'ok':
             self.connect_frida()
         else:
             self.set_frida_state(Text('state_no_dump'), 'idle')
             self.log(Text('log_frida_skipped'))
+
+    def _read_ios_version(self, generation, client):
+        """The device's iOS version without Frida (which otherwise reports it), for choosing the helper."""
+        try:
+            status, output = remote.run(client, 'sw_vers -productVersion')
+            version = output.strip() if status == 0 else ''
+        except Exception:
+            version = ''
+        if version:
+            self.post(self._set_device_os, generation, 'iOS ' + version)
+
+    def _set_device_os(self, generation, device_os):
+        if generation == self.generation and self.ssh is not None and not self.device_os:
+            self.device_os = device_os
 
     def connect_frida(self, then=None):
         """Connect Frida through the SSH tunnel; then() runs once it is ready.
@@ -1321,18 +1543,6 @@ class DumpGUI(tk.Tk):
         self.set_frida_state(Text('state_unused'), 'idle')
         self.btn_connect.configure(state='normal', text=self.t('connect'))
         self.log(Text('log_disconnected', reason=Text(reason)))
-
-    def ssh_alive(self):
-        """True while the SSH session a running batch depends on is usable."""
-        client = self.ssh
-        transport = client.get_transport() if client is not None else None
-        return transport is not None and transport.is_active()
-
-    def _abort_lost(self, jobs, index):
-        """Mark the jobs from index on as skipped after SSH was lost; the batch stops."""
-        self.post(self.log, Text('log_batch_ssh_lost', n=len(jobs) - index))
-        for bundle, _ in jobs[index:]:
-            self.post(self.set_status, bundle, Text('st_skipped_lost'), 'failed')
 
     def _watch_connection(self):
         transport = self.ssh.get_transport() if self.ssh is not None else None
@@ -1759,6 +1969,13 @@ class DumpGUI(tk.Tk):
         self._set_overall(0, None)
         return outdir
 
+    def helper_problem(self, error):
+        """A helper could not be used on the device: one warning for the whole batch, the apps say why in the list."""
+        if self.helper_warned:
+            return
+        self.helper_warned = True
+        messagebox.showwarning(self.t('m_helper_t'), self.t('m_helper', error=error))
+
     def start_dump(self):
         if self.dumping:
             return
@@ -1768,6 +1985,7 @@ class DumpGUI(tk.Tk):
         bundles = self._checked_in_order()
         if not bundles:
             return
+        self.helper_warned = False
         direct = self.direct_method()
         dump_dir = self.var_dump_dir.get().strip()
         if not direct and not self.check_dump_dir(dump_dir):
@@ -1775,11 +1993,28 @@ class DumpGUI(tk.Tk):
         jobs = self._jobs('dump', bundles)
         if jobs is None:
             return
-        if self.frida_version is None or self.tunnel is None:
+        native = self.native_method()
+        if native and not self.device_os:
+            # Connected before the method was switched to native: the version comes over SSH.
+            try:
+                version = native_decrypt.Device(self.ssh, self.var_user.get().strip(), self.var_password.get()).ios_version()
+            except Exception:
+                version = ''
+            self.device_os = 'iOS ' + version if version else None
+        if native:
+            try:
+                native_decrypt.local_helper(native_decrypt.choose(self.var_native_helper.get(), ios_major(self.device_os)))
+            except native_decrypt.HelperError as error:
+                messagebox.showwarning(self.t('m_helper_t'), self.t('m_helper', error=error))
+                return
+        if native and native_decrypt.refused(self.var_native_helper.get(), ios_major(self.device_os)):
+            messagebox.showerror(self.t('m_mremap_t'), self.t('m_mremap', version=native_decrypt.version_text(self.device_os)))
+            return
+        if not native and (self.frida_version is None or self.tunnel is None):
             self.connect_frida(then=self.start_dump)
             return
         # frida-ios-dump compiles its agent with frida.Compiler (frida 16 and later).
-        if not direct and int(major(self.frida_version) or 0) < 16:
+        if not direct and not native and int(major(self.frida_version) or 0) < 16:
             messagebox.showerror(self.t('m_frida_t'), self.t('m_dump_old_frida', version=self.frida_version))
             return
         # A decrypted IPA is named after its verification result, so any of these may be written.
@@ -1788,11 +2023,13 @@ class DumpGUI(tk.Tk):
         outdir = self._prepare_batch('dump', jobs, names)
         if outdir is None:
             return
-        self.log(Text('log_start_direct' if direct else 'log_start', n=len(jobs)))
-        options = dict(direct=direct, method=decrypt_method(self.device_os),
+        self.log(Text('log_start_native' if native else 'log_start_direct' if direct else 'log_start', n=len(jobs)))
+        helper = native_decrypt.choose(self.var_native_helper.get(), ios_major(self.device_os)) if native else None
+        options = dict(direct=direct, native=helper, method=helper or decrypt_method(self.device_os),
                        host=self.var_host.get().strip(), port=self.var_port.get().strip(),
                        user=self.var_user.get().strip(), password=self.var_password.get(),
-                       frida='127.0.0.1:{}'.format(self.tunnel.local_port), frida_version=self.frida_version,
+                       frida='127.0.0.1:{}'.format(self.tunnel.local_port) if self.tunnel else None,
+                       frida_version=self.frida_version,
                        outdir=outdir,
                        dump_dir=dump_dir, close_after=self.var_close_after.get(),
                        restart_frida=self.var_restart_frida.get(), generation=self.generation, names=names,
@@ -1816,6 +2053,352 @@ class DumpGUI(tk.Tk):
             return
         self.log(Text('log_extract_start', n=len(jobs)))
         self.run_background(self._extract_worker, jobs, outdir)
+
+    def cancel_batch(self):
+        if not messagebox.askyesno(self.t('m_cancel_t'), self.t('m_cancel')):
+            return
+        self.cancel_requested.set()
+        process = self.current_process
+        if process is not None and process.poll() is None:
+            process.terminate()
+        self.log(Text('log_cancel'))
+
+    def _set_verify(self, bundle, status, total, files, type_=None):
+        """Remember the verification result for the details pane and "Check partially decrypted apps"."""
+        if bundle in self.apps:
+            self.apps[bundle]['verify'] = dict(status=status, total=total, files=files, type=type_ or status)
+            if bundle in self.tree.selection():
+                self.show_details()
+
+    def direct_method(self):
+        """Whether decrypted IPAs are made by decrypting the installed files (R4: with Frida, or natively), not by
+        frida-ios-dump."""
+        return self.var_dump_method.get() in (METHOD_FRIDA_DIRECT, METHOD_NATIVE)
+
+    def native_method(self):
+        """Whether the files are decrypted by the helper programs, which need no Frida."""
+        return self.var_dump_method.get() == METHOD_NATIVE
+
+    def needs_frida(self):
+        return not self.native_method()
+
+    def _set_overall(self, value, text):
+        self.overall = (value, text)
+        self.progress['value'] = value
+        if isinstance(text, tuple):
+            text = text[0] + self.render(text[1])
+        self.lbl_progress.configure(text=self.render(text or '')[:PROGRESS_LABEL_CHARS])
+
+    def _batch_finished(self, mode, outdir, succeeded, total, paused, partial=0):
+        self.dumping = False
+        self.btn_cancel.configure(state='disabled')
+        if self.cancel_requested.is_set():
+            self._set_overall(0, Text('progress_cancelled', ok=succeeded, total=total))
+        elif paused:
+            self._set_overall(self.progress['value'], Text('progress_paused', ok=succeeded, total=total))
+        else:
+            if succeeded == total:
+                self._set_overall(100, Text('progress_done', total=total))
+            else:
+                self._set_overall(100, Text('progress_done_failed', ok=succeeded, failed=total - succeeded))
+        self._checks_changed()
+        self.log(Text('log_extract_finished' if mode == 'extract' else 'log_finished',
+                      ok=succeeded, total=total, dir=outdir))
+        if partial:
+            self.log(Text('log_partial_summary', n=partial))
+        if paused:
+            messagebox.showwarning(self.t('m_paused_t'), self.t('m_paused', n=MAX_CONSECUTIVE_FRIDA_ERRORS))
+
+    # ------------------------------------------------------- dependencies
+    def install_frida_ios_dump(self):
+        """Download frida-ios-dump into a folder the user picks."""
+        parent = filedialog.askdirectory(title=self.t('install_dump_pick'), parent=self.settings_window or self,
+                                         initialdir=os.path.dirname(DEFAULT_DUMP_DIR))
+        if not parent:
+            return
+        parent = os.path.normpath(parent)
+        # An empty folder is used as is; otherwise it gets a frida-ios-dump subfolder.
+        target = parent if not os.listdir(parent) else os.path.join(parent, 'frida-ios-dump')
+        self.offer_download(target, 'm_download_to')
+
+    def offer_download(self, dump_dir, question='m_download'):
+        if os.path.isdir(dump_dir) and os.listdir(dump_dir):
+            messagebox.showerror(self.t('m_download_t'), self.t('m_dump_dir_busy', path=dump_dir))
+            self.open_settings(tab=2)
+            return
+        if not messagebox.askyesno(self.t('m_download_t'),
+                                   self.t(question, path=dump_dir, url=FRIDA_IOS_DUMP_URL)):
+            return
+        self.var_dump_dir.set(dump_dir)
+        self._save_config()
+        self.btn_dump.configure(state='disabled')
+        self.log(Text('log_downloading', path=dump_dir))
+        self.run_background(self._download_worker, dump_dir)
+
+    def _download_worker(self, dump_dir):
+        try:
+            download_frida_ios_dump(dump_dir, lambda line: self.post(self.log, '  ' + line))
+        except Exception as error:
+            self.post(self.log, Text('log_download_failed', error=error))
+            self.post(self._checks_changed)
+            return
+        self.post(self._download_done)
+
+    def _download_done(self):
+        self.log(Text('log_download_done'))
+        self.var_dump_dir.set(self.var_dump_dir.get())  # refresh the status shown in Settings
+        self._checks_changed()
+        # Its confirmation lists the commands it is about to run.
+        self.install_dependencies()
+
+    def install_dependencies(self):
+        if self.dumping:
+            return
+        if self.native_method():
+            return
+        if self.direct_method():
+            # Decrypting the files directly needs frida only, not frida-ios-dump or its npm packages.
+            self.open_install_dialog(None)
+            return
+        dump_dir = self.var_dump_dir.get().strip()
+        state = dump_dir_status(dump_dir)
+        if state == 'empty':
+            messagebox.showerror(self.t('m_no_dump_dir_t'), self.t('m_no_dump_dir'))
+            self.open_settings(tab=2)
+            return
+        if state == 'missing':
+            self.offer_download(dump_dir)  # installs dependencies once downloaded
+            return
+        self.open_install_dialog(dump_dir)
+
+    def open_install_dialog(self, dump_dir):
+        """Let the user pick the frida version to install; the dialog doubles as the confirmation."""
+        if self.install_window is not None and self.install_window.winfo_exists():
+            self.install_window.lift()
+            return
+        window = self.install_window = tk.Toplevel(self)
+        window.title('{} – Install Frida dependencies'.format(APP_NAME))
+        window.transient(self)
+        window.resizable(True, False)
+        frame = ttk.Frame(window, padding=14)
+        frame.pack(fill='both', expand=True)
+        device = [self.device_frida_version]
+        # 'found', 'missing' (no frida-server on the device), 'no_ssh' or 'checking'
+        device_state = ['found' if device[0] else ('no_ssh' if self.ssh is None else 'checking')]
+        latest = [None]
+        choice = tk.StringVar(value='device' if device[0] else 'latest')
+        custom = tk.StringVar()
+        versions = ttk.Label(frame)
+        versions.pack(anchor='w', pady=(0, 8))
+        # Installed versions, each with a delete button.
+        ttk.Label(frame, text=self.t('inst_installed')).pack(anchor='w')
+        installed_frame = ttk.Frame(frame)
+        installed_frame.pack(fill='x', padx=(16, 0), pady=(2, 10))
+        ttk.Label(frame, text=self.t('inst_add')).pack(anchor='w', pady=(0, 2))
+        device_option = ttk.Radiobutton(frame, variable=choice, value='device')
+        device_option.pack(anchor='w')
+        latest_option = ttk.Radiobutton(frame, variable=choice, value='latest',
+                                        text=self.t('inst_latest', version=self.t('inst_loading')))
+        latest_option.pack(anchor='w', pady=2)
+        custom_row = ttk.Frame(frame)
+        custom_row.pack(anchor='w')
+        ttk.Radiobutton(custom_row, variable=choice, value='custom', text=self.t('inst_custom')).pack(side='left')
+        custom_box = ttk.Combobox(custom_row, textvariable=custom, width=14)
+        custom_box.pack(side='left', padx=4)
+        custom_box.bind('<<ComboboxSelected>>', lambda e: choice.set('custom'))
+        custom_box.bind('<KeyRelease>', lambda e: choice.set('custom'))
+        warning = WrapLabel(frame, foreground=PALETTE['muted'], justify='left')
+        warning.pack(fill='x', pady=(6, 0))
+        WrapLabel(frame, text=self.t('inst_will_run', path=frida_versions.ROOT), justify='left').pack(
+            fill='x', pady=(10, 2))
+        commands_text = tk.Text(frame, height=5, width=80, wrap='char', font='TkTextFont',
+                                background=self.theme_background, relief='solid', borderwidth=1)
+        commands_text.pack(fill='x')
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill='x', pady=(12, 0))
+        ttk.Button(buttons, text=self.t('inst_cancel'), command=window.destroy).pack(side='right')
+        run_button = ttk.Button(buttons, text=self.t('inst_run'))
+        run_button.pack(side='right', padx=6)
+
+        def selected():
+            version = {'device': device[0], 'latest': latest[0], 'custom': custom.get().strip()}[choice.get()]
+            return version if version and re.fullmatch(r'\d+\.\d+\.\d+', version) else None
+
+        def delete(version):
+            if self.dumping or self.installing:
+                return
+            if not messagebox.askyesno(self.t('m_frida_delete_t'), self.t('m_frida_delete', version=version),
+                                       parent=window):
+                return
+            in_use = version == self.frida_version
+            if in_use:
+                self._drop_frida()
+                self.set_frida_state(Text('state_unused'), 'idle')
+            try:
+                frida_versions.remove(version)
+                self.log(Text('log_frida_deleted', version=version))
+            except OSError as error:
+                messagebox.showerror(self.t('m_frida_delete_t'), str(error), parent=window)
+            refresh()
+            if in_use and self.ssh is not None:
+                self.connect_frida()  # picks another installed version, or offers a download
+
+        def refresh_installed():
+            for child in installed_frame.winfo_children():
+                child.destroy()
+            installed = frida_versions.installed()
+            if not installed:
+                ttk.Label(installed_frame, text=self.t('not_installed'), foreground=PALETTE['muted']).pack(anchor='w')
+            for version in installed:
+                row = ttk.Frame(installed_frame)
+                row.pack(fill='x', pady=1)
+                text = version
+                if version == self.frida_version:
+                    text = self.t('inst_in_use', version=version)
+                elif device[0] and version == frida_versions.pick(device[0], installed):
+                    text = self.t('inst_for_device', version=version)
+                ttk.Label(row, text=text, width=28).pack(side='left')
+                ttk.Button(row, text=self.t('inst_delete'), command=lambda v=version: delete(v)).pack(side='left')
+
+        def refresh(*args):
+            if not window.winfo_exists():
+                return
+            state = device_state[0]
+            shown = {'found': device[0], 'missing': self.t('not_installed'), 'no_ssh': self.t('inst_no_ssh'),
+                     'checking': self.t('inst_checking')}[state]
+            versions.configure(text=self.t('inst_device_version', device=shown))
+            refresh_installed()
+            device_option.configure(
+                text={'found': self.t('inst_device', version=device[0]),
+                      'missing': self.t('inst_device_missing'), 'no_ssh': self.t('inst_device_no_ssh'),
+                      'checking': self.t('inst_device_checking')}[state],
+                state='normal' if device[0] else 'disabled')
+            version = selected()
+            if version and version in frida_versions.installed():
+                warning.set_text(self.t('inst_reinstall', version=version))
+            elif version and device[0] and major(version) != major(device[0]):
+                warning.set_text(self.t('inst_other_major', device=device[0]))
+            else:
+                warning.set_text('')
+            commands = self._install_commands(version or '?', dump_dir)
+            commands_text.configure(state='normal')
+            commands_text.delete('1.0', 'end')
+            commands_text.insert('end', '\n'.join('{}   ({})'.format(' '.join(c), cwd) for c, cwd in commands))
+            commands_text.configure(state='disabled')
+            run_button.configure(state='normal' if version and not self.installing else 'disabled')
+
+        def loaded(found_device, releases, error):
+            if not window.winfo_exists():
+                return
+            if device_state[0] == 'checking':
+                device_state[0] = found_device
+            if found_device not in ('missing', 'no_ssh') and not device[0]:
+                device[0] = self.device_frida_version = found_device
+                device_state[0] = 'found'
+                choice.set('device')
+            if releases:
+                latest[0] = releases[0]
+                latest_option.configure(text=self.t('inst_latest', version=releases[0]))
+                custom_box.configure(values=releases)
+            else:
+                latest_option.configure(text=self.t('inst_fetch_failed', error=error), state='disabled')
+                if choice.get() == 'latest':
+                    choice.set('custom')
+            refresh()
+
+        def fetch():
+            found_device = device_state[0]
+            if device_state[0] == 'checking':
+                try:
+                    found_device = frida_server_status(self.ssh)[0] or 'missing'
+                except Exception:
+                    found_device = 'no_ssh'
+            try:
+                releases, error = frida_releases(), None
+            except Exception as exc:
+                releases, error = [], exc
+            self.post(loaded, found_device, releases, error)
+
+        def run():
+            version = selected()
+            if not version or self.dumping or self.installing:
+                return
+            window.destroy()
+            self.installing = True
+            self._checks_changed()
+            self.run_background(self._install_worker, version, dump_dir, None)
+
+        run_button.configure(command=run)
+        choice.trace_add('write', refresh)
+        custom.trace_add('write', refresh)
+        refresh()
+        self.run_background(fetch)
+
+    def _install_worker(self, version, dump_dir, then):
+        """Install frida `version` side by side with the others; then() runs once Frida reconnects."""
+        ok = False
+        try:
+            if frida_versions.is_legacy(version):
+                # No wheel for this Python: its own Python 3.8 and the frida egg (frida-ios-dump needs frida 16).
+                frida_versions.prepare_install(version)
+                try:
+                    frida_versions.install_legacy(version, lambda text: self.post(self.log, text))
+                    frida_versions.finish_install(version)
+                    ok = True
+                except Exception as error:
+                    self.post(self.log, Text('log_exec_failed', error=error))
+                    shutil.rmtree(frida_versions.staging(version), ignore_errors=True)
+                return
+            commands = self._install_commands(version, dump_dir)
+            frida_versions.prepare_install(version)
+            if self._run_command(*commands[0]):
+                frida_versions.finish_install(version)
+                ok = all(self._run_command(*command) for command in commands[1:])
+            else:
+                shutil.rmtree(frida_versions.staging(version), ignore_errors=True)
+        except OSError as error:
+            self.post(self.log, Text('log_exec_failed', error=error))
+        finally:
+            self.post(self._install_finished, version, ok, then)
+
+    def _install_finished(self, version, ok, then):
+        self.installing = False
+        self._checks_changed()
+        if not ok:
+            if self.ssh is not None and self.frida_version is None:
+                self.set_frida_state(Text('state_failed'), 'error')
+            return
+        self.log(Text('log_frida_installed', version=version))
+        # No restart needed: reconnect so the best version for this device is picked again.
+        if (self.ssh is not None and not self.dumping and self.needs_frida()
+                and (self.direct_method() or dump_dir_status(self.var_dump_dir.get().strip()) == 'ok')):
+            self._drop_frida()
+            self.connect_frida(then)
+
+    # --------------------------------------------------------------- close
+    def on_close(self):
+        if self.dumping:
+            if not messagebox.askyesno(self.t('m_busy_t'), self.t('m_close')):
+                return
+            self.cancel_requested.set()
+            if self.current_process is not None and self.current_process.poll() is None:
+                self.current_process.terminate()
+        self._save_config()
+        if self.ssh is not None:
+            self.disconnect('state_disconnected')
+        self.destroy()
+
+    def ssh_alive(self):
+        """True while the SSH session a running batch depends on is usable."""
+        client = self.ssh
+        transport = client.get_transport() if client is not None else None
+        return transport is not None and transport.is_active()
+
+    def _abort_lost(self, jobs, index):
+        """Mark the jobs from index on as skipped after SSH was lost; the batch stops."""
+        self.post(self.log, Text('log_batch_ssh_lost', n=len(jobs) - index))
+        for bundle, _ in jobs[index:]:
+            self.post(self.set_status, bundle, Text('st_skipped_lost'), 'failed')
 
     def _extract_worker(self, jobs, outdir):
         succeeded = 0
@@ -1864,15 +2447,6 @@ class DumpGUI(tk.Tk):
         self.post(self.set_status, bundle, Text('st_extracted'), 'done')
         self.post(self.log, Text('log_done', bundle=bundle, path=path))
         return True
-
-    def cancel_batch(self):
-        if not messagebox.askyesno(self.t('m_cancel_t'), self.t('m_cancel')):
-            return
-        self.cancel_requested.set()
-        process = self.current_process
-        if process is not None and process.poll() is None:
-            process.terminate()
-        self.log(Text('log_cancel'))
 
     def _dump_worker(self, jobs, options):
         counts = dict(succeeded=0, partial=0, paused=False)
@@ -2035,11 +2609,13 @@ class DumpGUI(tk.Tk):
                 todo = [job for job in jobs if job.error is None]
                 # Only the first cputype set up for a file works (iOS 8): each slice of a fat file gets its own copy.
                 with self._private_copies(todo if per_slice_copies(options) else [], options):
-                    if todo:
+                    if todo and options.get('native'):
+                        self._run_native(bundle, todo, work, options)
+                    elif todo:
                         self._run_repair_worker(bundle, todo, work, options, pid)
                     # frida-server sometimes crashes or stops responding: when asked, restart it (killing a
                     # crashed one is harmless) and try what it took down again, as long as that gets further.
-                    for _ in range(REPAIR_RETRIES):
+                    for _ in range(0 if options.get('native') else REPAIR_RETRIES):
                         retry = [job for job in todo if not job.repaired and job.connection_lost()]
                         if not retry or not options['restart_frida'] or self.cancel_requested.is_set():
                             break
@@ -2054,7 +2630,8 @@ class DumpGUI(tk.Tk):
                         self._run_repair_worker(bundle, retry, work, options, pid)
                         if sum(len(job.done) for job in retry) == before:
                             break
-                    if any(job.connection_lost() for job in todo if not job.repaired):
+                    if (not options.get('native')
+                            and any(job.connection_lost() for job in todo if not job.repaired)):
                         # frida-server died and was not restarted (or died again): whatever it held
                         # suspended must not stay so, frida-server's own relaunch included.
                         self._release_gated(options, bundle)
@@ -2104,6 +2681,35 @@ class DumpGUI(tk.Tk):
                     remote.run(self.ssh, 'rm -rf ' + shlex.quote(root), timeout=60)
                 except Exception:
                     pass
+
+    def _run_native(self, bundle, jobs, work, options):
+        """Decrypt the jobs' slices with the helper program chosen for the device; marks each job's decrypted slices."""
+        device = native_decrypt.Device(self.ssh, options['user'], options['password'])
+        helper = options['native']
+        by_id = {job.id: job for job in jobs}
+
+        def report(job, index, error):
+            job = by_id[job.id]
+            if error is None:
+                job.done.add(index)
+                if job.repaired:
+                    self.post(self.log, Indented(Text('log_repaired', file=ipa_verify.short_name(job.member))))
+            else:
+                job.slice_errors[index] = error
+
+        try:
+            native_decrypt.run(device, helper, bundle, self.apps[bundle]['path'], jobs, work, report,
+                               log=lambda text: self.post(self.log, '[{}] {}'.format(bundle, text)),
+                               cancelled=self.cancel_requested.is_set)
+        except native_decrypt.HelperError as error:
+            self.post(self.helper_problem, str(error))
+            for job in jobs:
+                if job.untried():
+                    job.error = ('helper', str(error))
+        except Exception as error:
+            for job in jobs:
+                if job.untried():
+                    job.error = ('helper', str(error) or type(error).__name__)
 
     def _run_repair_worker(self, bundle, jobs, work, options, pid):
         """Run repair_worker.py with the device's frida; marks each job's decrypted slices."""
@@ -2183,13 +2789,6 @@ class DumpGUI(tk.Tk):
     @staticmethod
     def reason_text(file):
         return Text('reason_' + file['reason'], error=file['error'])
-
-    def _set_verify(self, bundle, status, total, files, type_=None):
-        """Remember the verification result for the details pane and "Check partially decrypted apps"."""
-        if bundle in self.apps:
-            self.apps[bundle]['verify'] = dict(status=status, total=total, files=files, type=type_ or status)
-            if bundle in self.tree.selection():
-                self.show_details()
 
     def _as_root(self, options, command):
         if options['user'] == 'root':
@@ -2388,10 +2987,6 @@ class DumpGUI(tk.Tk):
             self._close_app(bundle, pid)
             time.sleep(1)
 
-    def direct_method(self):
-        """Whether decrypted IPAs are made by decrypting the installed files (R4), not by frida-ios-dump."""
-        return self.var_dump_method.get() == METHOD_FRIDA_DIRECT
-
     def _close_spawned(self, bundle, options):
         """Close what repair_worker.py started and left suspended."""
         for pid in options.pop('repair_pids', []):
@@ -2408,256 +3003,6 @@ class DumpGUI(tk.Tk):
         elif 'no such process' not in output.lower():  # it may already have exited or crashed
             self.post(self.log, Text('log_close_failed', bundle=bundle, pid=pid,
                                      error=output.strip() or self.t('exit_code', code=status)))
-
-    def _set_overall(self, value, text):
-        self.overall = (value, text)
-        self.progress['value'] = value
-        if isinstance(text, tuple):
-            text = text[0] + self.render(text[1])
-        self.lbl_progress.configure(text=self.render(text or '')[:PROGRESS_LABEL_CHARS])
-
-    def _batch_finished(self, mode, outdir, succeeded, total, paused, partial=0):
-        self.dumping = False
-        self.btn_cancel.configure(state='disabled')
-        if self.cancel_requested.is_set():
-            self._set_overall(0, Text('progress_cancelled', ok=succeeded, total=total))
-        elif paused:
-            self._set_overall(self.progress['value'], Text('progress_paused', ok=succeeded, total=total))
-        else:
-            if succeeded == total:
-                self._set_overall(100, Text('progress_done', total=total))
-            else:
-                self._set_overall(100, Text('progress_done_failed', ok=succeeded, failed=total - succeeded))
-        self._checks_changed()
-        self.log(Text('log_extract_finished' if mode == 'extract' else 'log_finished',
-                      ok=succeeded, total=total, dir=outdir))
-        if partial:
-            self.log(Text('log_partial_summary', n=partial))
-        if paused:
-            messagebox.showwarning(self.t('m_paused_t'), self.t('m_paused', n=MAX_CONSECUTIVE_FRIDA_ERRORS))
-
-    # ------------------------------------------------------- dependencies
-    def install_frida_ios_dump(self):
-        """Download frida-ios-dump into a folder the user picks."""
-        parent = filedialog.askdirectory(title=self.t('install_dump_pick'), parent=self.settings_window or self,
-                                         initialdir=os.path.dirname(DEFAULT_DUMP_DIR))
-        if not parent:
-            return
-        parent = os.path.normpath(parent)
-        # An empty folder is used as is; otherwise it gets a frida-ios-dump subfolder.
-        target = parent if not os.listdir(parent) else os.path.join(parent, 'frida-ios-dump')
-        self.offer_download(target, 'm_download_to')
-
-    def offer_download(self, dump_dir, question='m_download'):
-        if os.path.isdir(dump_dir) and os.listdir(dump_dir):
-            messagebox.showerror(self.t('m_download_t'), self.t('m_dump_dir_busy', path=dump_dir))
-            self.open_settings(tab=2)
-            return
-        if not messagebox.askyesno(self.t('m_download_t'),
-                                   self.t(question, path=dump_dir, url=FRIDA_IOS_DUMP_URL)):
-            return
-        self.var_dump_dir.set(dump_dir)
-        self._save_config()
-        self.btn_dump.configure(state='disabled')
-        self.log(Text('log_downloading', path=dump_dir))
-        self.run_background(self._download_worker, dump_dir)
-
-    def _download_worker(self, dump_dir):
-        try:
-            download_frida_ios_dump(dump_dir, lambda line: self.post(self.log, '  ' + line))
-        except Exception as error:
-            self.post(self.log, Text('log_download_failed', error=error))
-            self.post(self._checks_changed)
-            return
-        self.post(self._download_done)
-
-    def _download_done(self):
-        self.log(Text('log_download_done'))
-        self.var_dump_dir.set(self.var_dump_dir.get())  # refresh the status shown in Settings
-        self._checks_changed()
-        # Its confirmation lists the commands it is about to run.
-        self.install_dependencies()
-
-    def install_dependencies(self):
-        if self.dumping:
-            return
-        if self.direct_method():
-            # Decrypting the files directly needs frida only, not frida-ios-dump or its npm packages.
-            self.open_install_dialog(None)
-            return
-        dump_dir = self.var_dump_dir.get().strip()
-        state = dump_dir_status(dump_dir)
-        if state == 'empty':
-            messagebox.showerror(self.t('m_no_dump_dir_t'), self.t('m_no_dump_dir'))
-            self.open_settings(tab=2)
-            return
-        if state == 'missing':
-            self.offer_download(dump_dir)  # installs dependencies once downloaded
-            return
-        self.open_install_dialog(dump_dir)
-
-    def open_install_dialog(self, dump_dir):
-        """Let the user pick the frida version to install; the dialog doubles as the confirmation."""
-        if self.install_window is not None and self.install_window.winfo_exists():
-            self.install_window.lift()
-            return
-        window = self.install_window = tk.Toplevel(self)
-        window.title('{} – Install Frida dependencies'.format(APP_NAME))
-        window.transient(self)
-        window.resizable(True, False)
-        frame = ttk.Frame(window, padding=14)
-        frame.pack(fill='both', expand=True)
-        device = [self.device_frida_version]
-        # 'found', 'missing' (no frida-server on the device), 'no_ssh' or 'checking'
-        device_state = ['found' if device[0] else ('no_ssh' if self.ssh is None else 'checking')]
-        latest = [None]
-        choice = tk.StringVar(value='device' if device[0] else 'latest')
-        custom = tk.StringVar()
-        versions = ttk.Label(frame)
-        versions.pack(anchor='w', pady=(0, 8))
-        # Installed versions, each with a delete button.
-        ttk.Label(frame, text=self.t('inst_installed')).pack(anchor='w')
-        installed_frame = ttk.Frame(frame)
-        installed_frame.pack(fill='x', padx=(16, 0), pady=(2, 10))
-        ttk.Label(frame, text=self.t('inst_add')).pack(anchor='w', pady=(0, 2))
-        device_option = ttk.Radiobutton(frame, variable=choice, value='device')
-        device_option.pack(anchor='w')
-        latest_option = ttk.Radiobutton(frame, variable=choice, value='latest',
-                                        text=self.t('inst_latest', version=self.t('inst_loading')))
-        latest_option.pack(anchor='w', pady=2)
-        custom_row = ttk.Frame(frame)
-        custom_row.pack(anchor='w')
-        ttk.Radiobutton(custom_row, variable=choice, value='custom', text=self.t('inst_custom')).pack(side='left')
-        custom_box = ttk.Combobox(custom_row, textvariable=custom, width=14)
-        custom_box.pack(side='left', padx=4)
-        custom_box.bind('<<ComboboxSelected>>', lambda e: choice.set('custom'))
-        custom_box.bind('<KeyRelease>', lambda e: choice.set('custom'))
-        warning = WrapLabel(frame, foreground='#57606a', justify='left')
-        warning.pack(fill='x', pady=(6, 0))
-        WrapLabel(frame, text=self.t('inst_will_run', path=frida_versions.ROOT), justify='left').pack(
-            fill='x', pady=(10, 2))
-        commands_text = tk.Text(frame, height=5, width=80, wrap='char', font='TkTextFont',
-                                background=self.theme_background, relief='solid', borderwidth=1)
-        commands_text.pack(fill='x')
-        buttons = ttk.Frame(frame)
-        buttons.pack(fill='x', pady=(12, 0))
-        ttk.Button(buttons, text=self.t('inst_cancel'), command=window.destroy).pack(side='right')
-        run_button = ttk.Button(buttons, text=self.t('inst_run'))
-        run_button.pack(side='right', padx=6)
-
-        def selected():
-            version = {'device': device[0], 'latest': latest[0], 'custom': custom.get().strip()}[choice.get()]
-            return version if version and re.fullmatch(r'\d+\.\d+\.\d+', version) else None
-
-        def delete(version):
-            if self.dumping or self.installing:
-                return
-            if not messagebox.askyesno(self.t('m_frida_delete_t'), self.t('m_frida_delete', version=version),
-                                       parent=window):
-                return
-            in_use = version == self.frida_version
-            if in_use:
-                self._drop_frida()
-                self.set_frida_state(Text('state_unused'), 'idle')
-            try:
-                frida_versions.remove(version)
-                self.log(Text('log_frida_deleted', version=version))
-            except OSError as error:
-                messagebox.showerror(self.t('m_frida_delete_t'), str(error), parent=window)
-            refresh()
-            if in_use and self.ssh is not None:
-                self.connect_frida()  # picks another installed version, or offers a download
-
-        def refresh_installed():
-            for child in installed_frame.winfo_children():
-                child.destroy()
-            installed = frida_versions.installed()
-            if not installed:
-                ttk.Label(installed_frame, text=self.t('not_installed'), foreground='#57606a').pack(anchor='w')
-            for version in installed:
-                row = ttk.Frame(installed_frame)
-                row.pack(fill='x', pady=1)
-                text = version
-                if version == self.frida_version:
-                    text = self.t('inst_in_use', version=version)
-                elif device[0] and version == frida_versions.pick(device[0], installed):
-                    text = self.t('inst_for_device', version=version)
-                ttk.Label(row, text=text, width=28).pack(side='left')
-                ttk.Button(row, text=self.t('inst_delete'), command=lambda v=version: delete(v)).pack(side='left')
-
-        def refresh(*args):
-            if not window.winfo_exists():
-                return
-            state = device_state[0]
-            shown = {'found': device[0], 'missing': self.t('not_installed'), 'no_ssh': self.t('inst_no_ssh'),
-                     'checking': self.t('inst_checking')}[state]
-            versions.configure(text=self.t('inst_device_version', device=shown))
-            refresh_installed()
-            device_option.configure(
-                text={'found': self.t('inst_device', version=device[0]),
-                      'missing': self.t('inst_device_missing'), 'no_ssh': self.t('inst_device_no_ssh'),
-                      'checking': self.t('inst_device_checking')}[state],
-                state='normal' if device[0] else 'disabled')
-            version = selected()
-            if version and version in frida_versions.installed():
-                warning.set_text(self.t('inst_reinstall', version=version))
-            elif version and device[0] and major(version) != major(device[0]):
-                warning.set_text(self.t('inst_other_major', device=device[0]))
-            else:
-                warning.set_text('')
-            commands = self._install_commands(version or '?', dump_dir)
-            commands_text.configure(state='normal')
-            commands_text.delete('1.0', 'end')
-            commands_text.insert('end', '\n'.join('{}   ({})'.format(' '.join(c), cwd) for c, cwd in commands))
-            commands_text.configure(state='disabled')
-            run_button.configure(state='normal' if version and not self.installing else 'disabled')
-
-        def loaded(found_device, releases, error):
-            if not window.winfo_exists():
-                return
-            if device_state[0] == 'checking':
-                device_state[0] = found_device
-            if found_device not in ('missing', 'no_ssh') and not device[0]:
-                device[0] = self.device_frida_version = found_device
-                device_state[0] = 'found'
-                choice.set('device')
-            if releases:
-                latest[0] = releases[0]
-                latest_option.configure(text=self.t('inst_latest', version=releases[0]))
-                custom_box.configure(values=releases)
-            else:
-                latest_option.configure(text=self.t('inst_fetch_failed', error=error), state='disabled')
-                if choice.get() == 'latest':
-                    choice.set('custom')
-            refresh()
-
-        def fetch():
-            found_device = device_state[0]
-            if device_state[0] == 'checking':
-                try:
-                    found_device = frida_server_status(self.ssh)[0] or 'missing'
-                except Exception:
-                    found_device = 'no_ssh'
-            try:
-                releases, error = frida_releases(), None
-            except Exception as exc:
-                releases, error = [], exc
-            self.post(loaded, found_device, releases, error)
-
-        def run():
-            version = selected()
-            if not version or self.dumping or self.installing:
-                return
-            window.destroy()
-            self.installing = True
-            self._checks_changed()
-            self.run_background(self._install_worker, version, dump_dir, None)
-
-        run_button.configure(command=run)
-        choice.trace_add('write', refresh)
-        custom.trace_add('write', refresh)
-        refresh()
-        self.run_background(fetch)
 
     @staticmethod
     def _install_commands(version, dump_dir):
@@ -2695,60 +3040,6 @@ class DumpGUI(tk.Tk):
             self.post(self.log, Text('log_cmd_failed', code=code))
             return False
         return True
-
-    def _install_worker(self, version, dump_dir, then):
-        """Install frida `version` side by side with the others; then() runs once Frida reconnects."""
-        ok = False
-        try:
-            if frida_versions.is_legacy(version):
-                # No wheel for this Python: its own Python 3.8 and the frida egg (frida-ios-dump needs frida 16).
-                frida_versions.prepare_install(version)
-                try:
-                    frida_versions.install_legacy(version, lambda text: self.post(self.log, text))
-                    frida_versions.finish_install(version)
-                    ok = True
-                except Exception as error:
-                    self.post(self.log, Text('log_exec_failed', error=error))
-                    shutil.rmtree(frida_versions.staging(version), ignore_errors=True)
-                return
-            commands = self._install_commands(version, dump_dir)
-            frida_versions.prepare_install(version)
-            if self._run_command(*commands[0]):
-                frida_versions.finish_install(version)
-                ok = all(self._run_command(*command) for command in commands[1:])
-            else:
-                shutil.rmtree(frida_versions.staging(version), ignore_errors=True)
-        except OSError as error:
-            self.post(self.log, Text('log_exec_failed', error=error))
-        finally:
-            self.post(self._install_finished, version, ok, then)
-
-    def _install_finished(self, version, ok, then):
-        self.installing = False
-        self._checks_changed()
-        if not ok:
-            if self.ssh is not None and self.frida_version is None:
-                self.set_frida_state(Text('state_failed'), 'error')
-            return
-        self.log(Text('log_frida_installed', version=version))
-        # No restart needed: reconnect so the best version for this device is picked again.
-        if (self.ssh is not None and not self.dumping
-                and (self.direct_method() or dump_dir_status(self.var_dump_dir.get().strip()) == 'ok')):
-            self._drop_frida()
-            self.connect_frida(then)
-
-    # --------------------------------------------------------------- close
-    def on_close(self):
-        if self.dumping:
-            if not messagebox.askyesno(self.t('m_busy_t'), self.t('m_close')):
-                return
-            self.cancel_requested.set()
-            if self.current_process is not None and self.current_process.poll() is None:
-                self.current_process.terminate()
-        self._save_config()
-        if self.ssh is not None:
-            self.disconnect('state_disconnected')
-        self.destroy()
 
 
 def install_base_packages():

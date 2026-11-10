@@ -1,0 +1,43 @@
+name: build-helpers
+# Builds the two arm64 helpers the tool uploads to a jailbroken device (see helpers/README.md).
+# The binaries in helpers/bin are the ones committed to the repository; this workflow lets anyone rebuild them from
+# helpers/src and compare. Run it by hand or push a change under helpers/src.
+on:
+  push:
+    paths:
+      - 'helpers/src/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ldid
+        run: brew install ldid
+      - name: Build and sign
+        run: |
+          mkdir -p out
+          # Deployment target 8.0: the oldest the SDK accepts, so the same binary runs from iOS 8 on (a newer
+          # target makes dyld of iOS 12 and earlier refuse it: no LC_DYLD_INFO).
+          FLAGS="-arch arm64 -miphoneos-version-min=8.0 -O2 -Wall -Wno-deprecated-declarations"
+          xcrun -sdk iphoneos clang $FLAGS helpers/src/mremap_decrypt.c -o out/mremap_decrypt
+          xcrun -sdk iphoneos clang $FLAGS helpers/src/memory_decrypt.c -o out/memory_decrypt
+          # Fake signatures with entitlements: a jailbreak accepts these, no Apple certificate is involved.
+          ldid -Shelpers/src/entitlements_mremap.plist out/mremap_decrypt
+          ldid -Shelpers/src/entitlements_memory.plist out/memory_decrypt
+          cd out
+          {
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ) from ${GITHUB_SHA}"
+            xcrun -sdk iphoneos clang --version | head -1
+            echo "iphoneos SDK $(xcrun --sdk iphoneos --show-sdk-version)"
+            echo "ldid $(ldid 2>&1 | head -1)"
+            shasum -a 256 mremap_decrypt memory_decrypt
+            for f in mremap_decrypt memory_decrypt; do echo "-- $f"; otool -l $f | grep -A3 -E "LC_VERSION_MIN|LC_BUILD_VERSION" | head -5; done
+          } > BUILD_INFO.txt
+          cat BUILD_INFO.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helpers
+          path: out/

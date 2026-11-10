@@ -331,6 +331,33 @@ class RepairTests(IpaMixin, unittest.TestCase):
         self.assertEqual(ipa_repair.apply(path, jobs, '.'), 0)
 
 
+class ThemeTests(unittest.TestCase):
+    def test_unknown_themes_fall_back_to_light(self):
+        import ipa_extractor
+        for name in ('light', 'dark', 'black'):
+            self.assertEqual(ipa_extractor.theme_setting(name), name)
+        for bad in ('', 'pink', None, 3):
+            self.assertEqual(ipa_extractor.theme_setting(bad), 'light')
+        self.assertEqual(ipa_extractor.DEFAULTS['theme'], 'light')
+
+    def test_every_theme_defines_every_colour_and_black_is_black(self):
+        import ipa_extractor
+        keys = set(ipa_extractor.PALETTES['light'])
+        for name, palette in ipa_extractor.PALETTES.items():
+            self.assertEqual(set(palette), keys, name)
+            for value in palette.values():
+                self.assertRegex(value, r'^#[0-9a-f]{6}$')
+        self.assertEqual(ipa_extractor.PALETTES['black']['bg'], '#000000')
+        self.assertEqual(ipa_extractor.PALETTES['black']['field'], '#000000')
+
+    def test_every_language_names_the_themes(self):
+        import i18n
+        for code, strings in i18n.load_locales().items():
+            for key in ('theme', 'theme_light', 'theme_dark', 'theme_black'):
+                self.assertTrue(strings.get(key), (code, key))
+            self.assertEqual(len({strings['theme_light'], strings['theme_dark'], strings['theme_black']}), 3, code)
+
+
 class DecryptMethodTests(unittest.TestCase):
     def test_method_follows_ios_version(self):
         import ipa_extractor
@@ -411,13 +438,34 @@ class GatedLaunchTests(unittest.TestCase):
 class DumpMethodTests(unittest.TestCase):
     def test_setting_falls_back_to_direct(self):
         import ipa_extractor
-        self.assertEqual(ipa_extractor.DEFAULTS['dump_method'], ipa_extractor.METHOD_FRIDA_DIRECT)
+        self.assertEqual(ipa_extractor.DEFAULTS['dump_method'], ipa_extractor.METHOD_NATIVE)
         for value in ipa_extractor.DUMP_METHODS:
             self.assertEqual(ipa_extractor.dump_method_setting(value), value)
         for value in ('direct', 'dump', '', None):  # values of development builds, or none at all
-            self.assertEqual(ipa_extractor.dump_method_setting(value), ipa_extractor.METHOD_FRIDA_DIRECT)
-        # Method names say what they need, leaving room for methods without Frida.
-        self.assertTrue(all(value.startswith('frida_') for value in ipa_extractor.DUMP_METHODS))
+            self.assertEqual(ipa_extractor.dump_method_setting(value), ipa_extractor.METHOD_NATIVE)
+        # Method names say what they need: Frida for the frida_ ones, the helper programs for the native one.
+        self.assertEqual(sorted(ipa_extractor.DUMP_METHODS), ['frida_direct', 'frida_ios_dump', 'native'])
+
+    def test_frida_method_to_return_to(self):
+        import ipa_extractor as x
+        # the saved one, else the active method when it is a Frida one, else the direct mode
+        self.assertEqual(x.frida_method_setting(x.METHOD_FRIDA_IOS_DUMP, x.METHOD_NATIVE), x.METHOD_FRIDA_IOS_DUMP)
+        self.assertEqual(x.frida_method_setting('', x.METHOD_FRIDA_IOS_DUMP), x.METHOD_FRIDA_IOS_DUMP)
+        self.assertEqual(x.frida_method_setting(None, x.METHOD_NATIVE), x.METHOD_FRIDA_DIRECT)
+        self.assertEqual(x.frida_method_setting(x.METHOD_NATIVE, x.METHOD_NATIVE), x.METHOD_FRIDA_DIRECT)
+
+    def test_native_method_needs_no_frida_and_no_frida_ios_dump(self):
+        import ipa_extractor
+        from unittest import mock
+        for method, direct, native, frida in ((ipa_extractor.METHOD_FRIDA_DIRECT, True, False, True),
+                                              (ipa_extractor.METHOD_FRIDA_IOS_DUMP, False, False, True),
+                                              (ipa_extractor.METHOD_NATIVE, True, True, False)):
+            gui = mock.Mock()
+            gui.var_dump_method.get.return_value = method
+            self.assertEqual(ipa_extractor.DumpGUI.direct_method(gui), direct, method)
+            self.assertEqual(ipa_extractor.DumpGUI.native_method(gui), native, method)
+            gui.native_method = lambda g=gui: ipa_extractor.DumpGUI.native_method(g)
+            self.assertEqual(ipa_extractor.DumpGUI.needs_frida(gui), frida, method)
 
 
 class RepairJobTests(IpaMixin, unittest.TestCase):
@@ -801,6 +849,36 @@ class ExtractTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ipa_extract.extract_ipa(FakeSSH(self.tar(link)), '/c/U/X.app', os.path.join(folder, 'x.ipa'))
             self.assertEqual(os.listdir(folder), [])  # no partial IPA left behind
+
+class WrapTextTests(unittest.TestCase):
+    class Font:
+        def measure(self, text):
+            return 10 * len(text)
+
+    def wrap(self, text, width):
+        import ipa_extractor
+        return ipa_extractor.wrap_text(text, width, self.Font()).split('\n')
+
+    def test_words_of_spaced_scripts_are_never_split(self):
+        for text in ('Расшифрованные приложения читаются', 'Entschlüsselung ausführbarer Dateien', 'Giải mã ứng dụng đã cài',
+                     'Şifre çözme işlemi tamamlandı', '복호화 모드를 선택하세요'):
+            words = set(text.split())
+            for line in self.wrap(text, 140):
+                for word in line.split():
+                    self.assertIn(word, words, line)
+
+    def test_a_long_word_stays_on_a_line_of_its_own(self):
+        self.assertEqual(self.wrap('aa Расшифровывать bb', 100), ['aa', 'Расшифровывать', 'bb'])
+
+    def test_unspaced_scripts_break_between_characters(self):
+        self.assertEqual(self.wrap('これは長い日本語の文です', 50), ['これは長い', '日本語の文', 'です'])
+        self.assertEqual(self.wrap('這是一段很長的中文說明', 50), ['這是一段很', '長的中文說', '明'])
+        thai = 'การตั้งค่านี้ใช้กับ'
+        self.assertTrue(all(len(line) <= 5 for line in self.wrap(thai, 50)))
+
+    def test_paths_and_identifiers_stay_whole(self):
+        path = r'C:\Users\me\frida-ios-dump'
+        self.assertEqual(self.wrap('open ' + path + ' now', 150), ['open', path, 'now'])
 
 
 if __name__ == '__main__':

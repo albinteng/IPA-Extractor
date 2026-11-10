@@ -2,3 +2,7 @@
 *.bat text eol=crlf
 *.png binary
 *.ico binary
+helpers/bin/mremap_decrypt binary
+helpers/bin/memory_decrypt binary
+helpers/src/*.c text eol=lf
+helpers/src/*.plist text eol=lf
