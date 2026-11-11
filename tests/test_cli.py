@@ -2,13 +2,15 @@ import contextlib
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
 import ipa_cli
-import ipa_extractor as core
-from ipa_extractor import Indented, Text
+import engine as core
+from engine import Indented, Text
 
 
 def parse(*argv):
@@ -279,11 +281,24 @@ class OutputTests(unittest.TestCase):
 
 class EngineTests(unittest.TestCase):
     def test_the_window_and_the_command_line_share_the_engine(self):
+        try:
+            import ipa_extractor
+        except ImportError:
+            self.skipTest('no tkinter')
         for name in ('_extract_worker', '_dump_worker', '_finish_dump', '_repair', 'install_frida', 'ssh_alive'):
             self.assertTrue(hasattr(core.DumpEngine, name), name)
-            self.assertFalse(name in vars(core.DumpGUI), name)
+            self.assertFalse(name in vars(ipa_extractor.DumpGUI), name)
         self.assertTrue(issubclass(ipa_cli.Cli, core.DumpEngine))
-        self.assertTrue(issubclass(core.DumpGUI, core.DumpEngine))
+        self.assertTrue(issubclass(ipa_extractor.DumpGUI, core.DumpEngine))
+
+    def test_the_command_line_runs_without_tkinter(self):
+        code = ("import sys; sys.modules['tkinter'] = None; import ipa_cli; "
+                "sys.exit(ipa_cli.main(['config', 'path']))")      # an import of tkinter would raise ImportError
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        done = subprocess.run([sys.executable, '-c', code], cwd=here, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(done.stdout.strip().endswith('.json'))
+        self.assertNotIn('tkinter', sys.modules.get('engine').__dict__)
 
     def test_file_mapping_is_refused_on_ios_16_before_anything_runs(self):
         for argv in (['--helper', 'mremap'], []):

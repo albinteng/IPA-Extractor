@@ -89,15 +89,15 @@ class AppInfoTests(unittest.TestCase):
 
 class DumpDirTests(unittest.TestCase):
     def test_status(self):
-        import ipa_extractor
+        import engine
         with tempfile.TemporaryDirectory() as path:
-            self.assertEqual(ipa_extractor.dump_dir_status(''), 'empty')
-            self.assertEqual(ipa_extractor.dump_dir_status(os.path.join(path, 'missing')), 'missing')
+            self.assertEqual(engine.dump_dir_status(''), 'empty')
+            self.assertEqual(engine.dump_dir_status(os.path.join(path, 'missing')), 'missing')
             for name in ('dump.py', 'dump.js'):
                 open(os.path.join(path, name), 'w').close()
-            self.assertEqual(ipa_extractor.dump_dir_status(path), 'no_bridge')
+            self.assertEqual(engine.dump_dir_status(path), 'no_bridge')
             os.makedirs(os.path.join(path, 'node_modules', 'frida-objc-bridge'))
-            self.assertEqual(ipa_extractor.dump_dir_status(path), 'ok')
+            self.assertEqual(engine.dump_dir_status(path), 'ok')
 
 
 class FridaVersionTests(unittest.TestCase):
@@ -333,12 +333,12 @@ class RepairTests(IpaMixin, unittest.TestCase):
 
 class ThemeTests(unittest.TestCase):
     def test_unknown_themes_fall_back_to_light(self):
-        import ipa_extractor
+        import engine
         for name in ('light', 'dark', 'black'):
-            self.assertEqual(ipa_extractor.theme_setting(name), name)
+            self.assertEqual(engine.theme_setting(name), name)
         for bad in ('', 'pink', None, 3):
-            self.assertEqual(ipa_extractor.theme_setting(bad), 'light')
-        self.assertEqual(ipa_extractor.DEFAULTS['theme'], 'light')
+            self.assertEqual(engine.theme_setting(bad), 'light')
+        self.assertEqual(engine.DEFAULTS['theme'], 'light')
 
     def test_every_theme_defines_every_colour_and_black_is_black(self):
         import ipa_extractor
@@ -360,12 +360,12 @@ class ThemeTests(unittest.TestCase):
 
 class DecryptMethodTests(unittest.TestCase):
     def test_method_follows_ios_version(self):
-        import ipa_extractor
-        self.assertEqual(ipa_extractor.decrypt_method('iPhone OS 12.4'), 'mremap')
-        self.assertEqual(ipa_extractor.decrypt_method('iPhone OS 15.8.3'), 'mremap')
-        self.assertEqual(ipa_extractor.decrypt_method('iPhone OS 16.1.2'), 'memory')
-        self.assertEqual(ipa_extractor.decrypt_method('iPhone OS 17.0'), 'memory')
-        self.assertEqual(ipa_extractor.decrypt_method(None), 'mremap')
+        import engine
+        self.assertEqual(engine.decrypt_method('iPhone OS 12.4'), 'mremap')
+        self.assertEqual(engine.decrypt_method('iPhone OS 15.8.3'), 'mremap')
+        self.assertEqual(engine.decrypt_method('iPhone OS 16.1.2'), 'memory')
+        self.assertEqual(engine.decrypt_method('iPhone OS 17.0'), 'memory')
+        self.assertEqual(engine.decrypt_method(None), 'mremap')
 
     def test_versions(self):
         import ipa_repair
@@ -375,44 +375,44 @@ class DecryptMethodTests(unittest.TestCase):
         self.assertEqual(ipa_repair.version_tuple(''), ())
 
     def test_per_slice_copies_only_on_old_ios(self):
-        import ipa_extractor
-        copies = lambda ios, method='mremap': ipa_extractor.per_slice_copies(dict(ios=ios, method=method))
+        import engine
+        copies = lambda ios, method='mremap': engine.per_slice_copies(dict(ios=ios, method=method))
         self.assertTrue(copies('iOS 8.1.1'))
         self.assertFalse(copies('iPhone OS 12.4'))
         self.assertFalse(copies(''))
         self.assertFalse(copies('iOS 8.1.1', 'memory'))
 
     def test_repair_failures(self):
-        import ipa_extractor
-        self.assertEqual(ipa_extractor.repair_failure('unsupported:watch'), ('repair_unsupported_watch', ''))
-        self.assertEqual(ipa_extractor.repair_failure('mremap_encrypted failed: Cannot allocate memory (errno 12)')[0],
+        import engine
+        self.assertEqual(engine.repair_failure('unsupported:watch'), ('repair_unsupported_watch', ''))
+        self.assertEqual(engine.repair_failure('mremap_encrypted failed: Cannot allocate memory (errno 12)')[0],
                          'repair_nomem')
-        self.assertEqual(ipa_extractor.repair_failure('TransportError: timeout')[0], 'repair_failed')
+        self.assertEqual(engine.repair_failure('TransportError: timeout')[0], 'repair_failed')
 
 
 class GatedLaunchTests(unittest.TestCase):
     def test_frida_launchd_pids(self):
-        import ipa_extractor
+        import engine
         listing = ('PID\tStatus\tLabel\n19362\t-9\tre.frida.server\n-\t0\tre.frida.helper\n'
                    '88\t0\tcom.apple.backboardd\n')
-        self.assertEqual(ipa_extractor.frida_launchd_pids(listing), [19362])
+        self.assertEqual(engine.frida_launchd_pids(listing), [19362])
 
     def test_gated_launches(self):
-        import ipa_extractor
+        import engine
         ps = ('  20058 T    xpcproxy com.apple.siriinferenced\n'
               '  20071 T    xpcproxy com.adguard.AdguardExtension.SafariWebExtension\n'
               '  20072 Ss   xpcproxy com.adguard.AdguardExtension.Tunnel\n'
               '  20080 T    /private/var/containers/Bundle/Application/X/Adguard.app/Adguard\n')
-        self.assertEqual(ipa_extractor.gated_launches(ps, 'com.adguard.AdguardExtension'), ([20071], [20058]))
-        self.assertEqual(ipa_extractor.gated_launches(ps), ([], [20058, 20071]))
+        self.assertEqual(engine.gated_launches(ps, 'com.adguard.AdguardExtension'), ([20071], [20058]))
+        self.assertEqual(engine.gated_launches(ps), ([], [20058, 20071]))
 
     def test_gated_launches_match_the_app_only(self):
-        import ipa_extractor
+        import engine
         ps = ('  1 T    xpcproxy UIKitApplication:com.foo[8a3c][rb-legacy]\n'  # the app itself
               '  2 T    xpcproxy com.foo.Share(6F2B)\n'
               '  3 T    xpcproxy com.foobar.Widget\n'                         # another app
               '  4 T    xpcproxy UIKitApplication:com.foobar[11aa]\n')
-        self.assertEqual(ipa_extractor.gated_launches(ps, 'com.foo'), ([1, 2], [3, 4]))
+        self.assertEqual(engine.gated_launches(ps, 'com.foo'), ([1, 2], [3, 4]))
 
     def test_release_gated_resumes_frida_server_and_services(self):
         import ipa_extractor
@@ -437,29 +437,30 @@ class GatedLaunchTests(unittest.TestCase):
 
 class DumpMethodTests(unittest.TestCase):
     def test_setting_falls_back_to_direct(self):
-        import ipa_extractor
-        self.assertEqual(ipa_extractor.DEFAULTS['dump_method'], ipa_extractor.METHOD_NATIVE)
-        for value in ipa_extractor.DUMP_METHODS:
-            self.assertEqual(ipa_extractor.dump_method_setting(value), value)
+        import engine
+        self.assertEqual(engine.DEFAULTS['dump_method'], engine.METHOD_NATIVE)
+        for value in engine.DUMP_METHODS:
+            self.assertEqual(engine.dump_method_setting(value), value)
         for value in ('direct', 'dump', '', None):  # values of development builds, or none at all
-            self.assertEqual(ipa_extractor.dump_method_setting(value), ipa_extractor.METHOD_NATIVE)
+            self.assertEqual(engine.dump_method_setting(value), engine.METHOD_NATIVE)
         # Method names say what they need: Frida for the frida_ ones, the helper programs for the native one.
-        self.assertEqual(sorted(ipa_extractor.DUMP_METHODS), ['frida_direct', 'frida_ios_dump', 'native'])
+        self.assertEqual(sorted(engine.DUMP_METHODS), ['frida_direct', 'frida_ios_dump', 'native'])
 
     def test_frida_method_to_return_to(self):
-        import ipa_extractor as x
+        import engine
         # the saved one, else the active method when it is a Frida one, else the direct mode
-        self.assertEqual(x.frida_method_setting(x.METHOD_FRIDA_IOS_DUMP, x.METHOD_NATIVE), x.METHOD_FRIDA_IOS_DUMP)
-        self.assertEqual(x.frida_method_setting('', x.METHOD_FRIDA_IOS_DUMP), x.METHOD_FRIDA_IOS_DUMP)
-        self.assertEqual(x.frida_method_setting(None, x.METHOD_NATIVE), x.METHOD_FRIDA_DIRECT)
-        self.assertEqual(x.frida_method_setting(x.METHOD_NATIVE, x.METHOD_NATIVE), x.METHOD_FRIDA_DIRECT)
+        self.assertEqual(engine.frida_method_setting(engine.METHOD_FRIDA_IOS_DUMP, engine.METHOD_NATIVE), engine.METHOD_FRIDA_IOS_DUMP)
+        self.assertEqual(engine.frida_method_setting('', engine.METHOD_FRIDA_IOS_DUMP), engine.METHOD_FRIDA_IOS_DUMP)
+        self.assertEqual(engine.frida_method_setting(None, engine.METHOD_NATIVE), engine.METHOD_FRIDA_DIRECT)
+        self.assertEqual(engine.frida_method_setting(engine.METHOD_NATIVE, engine.METHOD_NATIVE), engine.METHOD_FRIDA_DIRECT)
 
     def test_native_method_needs_no_frida_and_no_frida_ios_dump(self):
+        import engine
         import ipa_extractor
         from unittest import mock
-        for method, direct, native, frida in ((ipa_extractor.METHOD_FRIDA_DIRECT, True, False, True),
-                                              (ipa_extractor.METHOD_FRIDA_IOS_DUMP, False, False, True),
-                                              (ipa_extractor.METHOD_NATIVE, True, True, False)):
+        for method, direct, native, frida in ((engine.METHOD_FRIDA_DIRECT, True, False, True),
+                                              (engine.METHOD_FRIDA_IOS_DUMP, False, False, True),
+                                              (engine.METHOD_NATIVE, True, True, False)):
             gui = mock.Mock()
             gui.var_dump_method.get.return_value = method
             self.assertEqual(ipa_extractor.DumpGUI.direct_method(gui), direct, method)
@@ -667,7 +668,7 @@ class SuspendedPidsTests(unittest.TestCase):
 
 class ErrorClassificationTests(unittest.TestCase):
     def test_known_errors(self):
-        import ipa_extractor
+        import engine
         cases = {
             'frida.NotSupportedError: unable to launch iOS app via FBS: '
             'The operation couldn’t be completed. Application failed preflight checks': 'preflight',
@@ -680,7 +681,7 @@ class ErrorClassificationTests(unittest.TestCase):
             'something else': None,
         }
         for message, kind in cases.items():
-            self.assertEqual(ipa_extractor.classify_error(message), kind, message)
+            self.assertEqual(engine.classify_error(message), kind, message)
 
 
 class WorkerTests(unittest.TestCase):

@@ -5,6 +5,7 @@ import unittest
 from tkinter import messagebox, ttk
 from unittest import mock
 
+import engine
 import ipa_extractor as core
 
 
@@ -27,7 +28,7 @@ def label_with(root, text):
 class WindowTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.mkdtemp(prefix='window-test-')
-        patcher = mock.patch.object(core, 'CONFIG_PATH', os.path.join(folder, 'settings.json'))
+        patcher = mock.patch.object(engine, 'CONFIG_PATH', os.path.join(folder, 'settings.json'))
         patcher.start()
         self.addCleanup(patcher.stop)
         try:
@@ -53,8 +54,8 @@ class WindowTests(unittest.TestCase):
 
     def test_the_frida_status_beside_ssh_shows_only_with_a_frida_method(self):
         frame = self.gui.frida_dot.master
-        for method, shown in ((core.METHOD_NATIVE, False), (core.METHOD_FRIDA_DIRECT, True),
-                              (core.METHOD_NATIVE, False), (core.METHOD_FRIDA_IOS_DUMP, True)):
+        for method, shown in ((engine.METHOD_NATIVE, False), (engine.METHOD_FRIDA_DIRECT, True),
+                              (engine.METHOD_NATIVE, False), (engine.METHOD_FRIDA_IOS_DUMP, True)):
             self.gui.var_dump_method.set(method)
             self.gui.show_frida_indicator()
             self.assertEqual(bool(frame.winfo_manager()), shown, method)     # unpacked: no geometry manager
@@ -64,7 +65,7 @@ class WindowTests(unittest.TestCase):
         self.select_decryption_tab()
         port = label_with(self.gui, self.gui.t('frida_port'))
         self.assertIsNotNone(port)
-        for method in (core.METHOD_NATIVE, core.METHOD_FRIDA_DIRECT):
+        for method in (engine.METHOD_NATIVE, engine.METHOD_FRIDA_DIRECT):
             self.gui.var_dump_method.set(method)
             self.gui.update()
             self.assertTrue(port.master.grid_info(), method)
@@ -72,7 +73,7 @@ class WindowTests(unittest.TestCase):
 
     def dump_with(self, helper, device_os):
         gui = self.gui
-        gui.var_dump_method.set(core.METHOD_NATIVE)
+        gui.var_dump_method.set(engine.METHOD_NATIVE)
         gui.var_native_helper.set(helper)
         gui.device_os = device_os
         gui.ssh = object()
@@ -91,8 +92,8 @@ class WindowTests(unittest.TestCase):
         prepare.assert_not_called()
 
     def test_an_unreadable_helper_warns_and_nothing_starts(self):
-        with mock.patch.object(core.native_decrypt, 'local_helper',
-                               side_effect=core.native_decrypt.HelperError('x cannot be read')), \
+        with mock.patch.object(engine.native_decrypt, 'local_helper',
+                               side_effect=engine.native_decrypt.HelperError('x cannot be read')), \
                 mock.patch.object(messagebox, 'showwarning') as warning:
             error, prepare = self.dump_with('memory', 'iOS 17.0')
         warning.assert_called_once()

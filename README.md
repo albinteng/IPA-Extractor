@@ -33,7 +33,7 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi (
 
 **Computer**
 
-- Python 3.9 or later with tkinter. The Python packages the tool needs ([Paramiko](https://www.paramiko.org/), [cryptography](https://cryptography.io/), and [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) on Linux) are installed on first start, after asking.
+- Python 3.9 or later; the window needs its tkinter module, the command line does not. The Python packages the tool needs ([Paramiko](https://www.paramiko.org/), [cryptography](https://cryptography.io/), and [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) on Linux) are installed on first start, after asking.
 - For decrypted IPAs made with frida-ios-dump: Node.js (`npm install` fetches `frida-objc-bridge` for frida-ios-dump) and a copy of frida-ios-dump; the tool can download it for you. *Direct decryption mode* and *Native helper* need neither.
 
 ## Setting up the device
@@ -105,7 +105,7 @@ Settings are stored in `settings.json` next to the tool, so they move with its f
 
 ## CLI
 
-Everything the window does is also available without it, for scripts and servers: `ipa_cli.py` (or any arguments to `ipa_extractor.py` / `ipa_extractor.sh`; it needs the same Python packages, and Python's `tkinter` module must be installed, but no display is used). It reads the device and the options from `settings.json`, the file the window saves, and options given on the command line override it.
+Everything the window does is also available without it, for scripts and servers: `ipa_cli.py` (or any arguments to `ipa_extractor.py` / `ipa_extractor.sh`; it needs the same Python packages but neither tkinter nor a display). It reads the device and the options from `settings.json`, the file the window saves, and options given on the command line override it.
 
 ```
 python ipa_cli.py apps -H 192.168.1.20 -u root          list the apps (add --json for scripts)
@@ -144,7 +144,8 @@ Each language is a JSON file in `locales/` named by its language tag, e.g. `ja.j
 
 | File | Purpose |
 | --- | --- |
-| `ipa_extractor.py` | Tkinter GUI, and the engine (`DumpEngine`) that copies and decrypts apps, shared with the command line |
+| `ipa_extractor.py` | Tkinter GUI |
+| `engine.py` | What needs no window: settings, SSH, and the engine (`DumpEngine`) that copies and decrypts apps; shared by the GUI and the CLI, never imports tkinter |
 | `ipa_cli.py` | Command line: the same features without the window |
 | `ipa_extractor.bat`, `ipa_extractor.sh` | Launchers for Windows and Linux/macOS |
 | `device_apps.py` | Lists installed apps over SSH/SFTP with the names the Home screen shows |

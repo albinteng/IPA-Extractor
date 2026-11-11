@@ -30,9 +30,9 @@ import ipa_verify
 import native_decrypt
 import remote
 
-# The tool's engine lives with the window's code; importing it does not open a window.
-import ipa_extractor as core
-from ipa_extractor import Text, Indented
+# The engine needs no window and no tkinter: the command line runs on a server without Tk.
+import engine as core
+from engine import Text, Indented
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PARTIAL, EXIT_CANCELLED = 0, 1, 2, 3, 130
 MODES = {'native': core.METHOD_NATIVE, 'frida-direct': core.METHOD_FRIDA_DIRECT,

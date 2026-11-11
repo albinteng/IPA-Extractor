@@ -10,7 +10,8 @@ if [ ! -x .venv/bin/python ]; then
         echo "IPA Extractor needs Python 3.9 or later: https://www.python.org/downloads/" >&2
         exit 1
     fi
-    if ! "$PYTHON" -c 'import tkinter' 2>/dev/null; then
+    # Only the window needs Tk; the command line (any argument) runs on a server without it.
+    if [ $# -eq 0 ] && ! "$PYTHON" -c 'import tkinter' 2>/dev/null; then
         echo "Python's Tk support (tkinter) is missing. Install it, for example:" >&2
         echo "  Debian/Ubuntu:    sudo apt install python3-tk" >&2
         echo "  Fedora:           sudo dnf install python3-tkinter" >&2
