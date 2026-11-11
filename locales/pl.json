@@ -110,6 +110,7 @@
   "font": "Czcionka",
   "font_size": "Rozmiar tekstu",
   "theme": "Motyw",
+  "theme_system": "Zgodny z systemem",
   "theme_light": "Jasny",
   "theme_dark": "Ciemny",
   "theme_black": "Czarny (czysta czerń)",

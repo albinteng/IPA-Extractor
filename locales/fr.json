@@ -110,6 +110,7 @@
   "font": "Police",
   "font_size": "Taille du texte",
   "theme": "Thème",
+  "theme_system": "Suivre le système",
   "theme_light": "Clair",
   "theme_dark": "Sombre",
   "theme_black": "Noir (noir pur)",

@@ -110,6 +110,7 @@
   "font": "Font",
   "font_size": "Ukuran teks",
   "theme": "Tema",
+  "theme_system": "Ikuti sistem",
   "theme_light": "Terang",
   "theme_dark": "Gelap",
   "theme_black": "Hitam (hitam murni)",

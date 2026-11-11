@@ -110,6 +110,7 @@
   "font": "Lettertype",
   "font_size": "Tekstgrootte",
   "theme": "Thema",
+  "theme_system": "Systeem volgen",
   "theme_light": "Licht",
   "theme_dark": "Donker",
   "theme_black": "Zwart (puur zwart)",

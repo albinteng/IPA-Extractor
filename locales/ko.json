@@ -113,6 +113,7 @@
   "font": "글꼴",
   "font_size": "글자 크기",
   "theme": "테마",
+  "theme_system": "시스템 설정 따르기",
   "theme_light": "라이트",
   "theme_dark": "다크",
   "theme_black": "블랙 (순수 검정)",

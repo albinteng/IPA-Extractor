@@ -113,6 +113,7 @@
   "font": "ฟอนต์",
   "font_size": "ขนาดตัวอักษร",
   "theme": "ธีม",
+  "theme_system": "ตามระบบ",
   "theme_light": "สว่าง",
   "theme_dark": "มืด",
   "theme_black": "ดำ (ดำสนิท)",

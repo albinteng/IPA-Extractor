@@ -110,6 +110,7 @@
   "font": "Шрифт",
   "font_size": "Розмір тексту",
   "theme": "Тема",
+  "theme_system": "Як у системі",
   "theme_light": "Світла",
   "theme_dark": "Темна",
   "theme_black": "Чорна (суто чорна)",

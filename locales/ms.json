@@ -110,6 +110,7 @@
   "font": "Fon",
   "font_size": "Saiz teks",
   "theme": "Tema",
+  "theme_system": "Ikut sistem",
   "theme_light": "Cerah",
   "theme_dark": "Gelap",
   "theme_black": "Hitam (hitam tulen)",

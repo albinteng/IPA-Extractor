@@ -110,6 +110,7 @@
   "font": "Schriftart",
   "font_size": "Textgröße",
   "theme": "Design",
+  "theme_system": "System folgen",
   "theme_light": "Hell",
   "theme_dark": "Dunkel",
   "theme_black": "Schwarz (reines Schwarz)",

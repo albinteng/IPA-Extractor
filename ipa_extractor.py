@@ -28,7 +28,7 @@ from engine import (
     NO_WINDOW, THEMES, THEME_BLACK, THEME_DARK, THEME_LIGHT, DumpEngine, Indented, SSHTunnel, Text, __version__,
     decrypt_method, download_frida_ios_dump, dump_dir_status, dump_method_setting, frida_method_setting,
     frida_releases, frida_server_status, ios_major, is_apple_app, is_user_app, load_config, major, natural_key,
-    open_ssh, pip_install, probe_frida, script_dir, theme_setting)
+    open_ssh, pip_install, probe_frida, resolve_theme, script_dir, theme_setting)
 
 CHECKED, UNCHECKED = '☑', '☐'
 # UI colours per theme (the theme setting). Light keeps the platform's native look; dark and black
@@ -246,7 +246,7 @@ class DumpGUI(DumpEngine, tk.Tk):
     def apply_theme(self):
         """Light: native theme on Windows and macOS, Sun Valley (sv-ttk) on Linux instead of Tk's dated
         default. Dark and black: "clam" restyled with the palette (black is a pure black background)."""
-        name = theme_setting(self.var_theme.get())
+        name = resolve_theme(self.var_theme.get())     # the system's choice is read here, once per start or change
         PALETTE.clear()
         PALETTE.update(PALETTES[name])
         if name == THEME_LIGHT:
@@ -303,7 +303,9 @@ class DumpGUI(DumpEngine, tk.Tk):
                       indicatorforeground=[('disabled', p['muted'])])
         style.configure('TNotebook', background=p['bg'], bordercolor=p['border'])
         style.configure('TNotebook.Tab', background=p['button'], foreground=p['fg'])
-        style.map('TNotebook.Tab', background=[('selected', p['bg']), ('active', p['hover'])])
+        # clam shrinks the selected tab through its own padding map; give it the tab padding, 2 px taller on top
+        style.map('TNotebook.Tab', background=[('selected', p['bg']), ('active', p['hover'])],
+                  padding=[('selected', (18, 9, 18, 7))])
         style.configure('Treeview', background=p['field'], fieldbackground=p['field'], foreground=p['fg'])
         style.map('Treeview', background=[('selected', p['select'])], foreground=[('selected', p['fg'])])
         style.configure('Treeview.Heading', background=p['button'], foreground=p['fg'], relief='flat')
@@ -337,7 +339,7 @@ class DumpGUI(DumpEngine, tk.Tk):
             import ctypes
             window.update_idletasks()
             handle = ctypes.windll.user32.GetParent(window.winfo_id())
-            value = ctypes.c_int(0 if theme_setting(self.var_theme.get()) == THEME_LIGHT else 1)
+            value = ctypes.c_int(0 if resolve_theme(self.var_theme.get()) == THEME_LIGHT else 1)
             for attribute in (20, 19):   # DWMWA_USE_IMMERSIVE_DARK_MODE, and its number before Windows 10 20H1
                 ctypes.windll.dwmapi.DwmSetWindowAttribute(handle, attribute, ctypes.byref(value), ctypes.sizeof(value))
         except (OSError, AttributeError, tk.TclError):

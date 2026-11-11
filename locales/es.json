@@ -110,6 +110,7 @@
   "font": "Fuente",
   "font_size": "Tamaño del texto",
   "theme": "Tema",
+  "theme_system": "Seguir el sistema",
   "theme_light": "Claro",
   "theme_dark": "Oscuro",
   "theme_black": "Negro (negro puro)",

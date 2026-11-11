@@ -114,6 +114,7 @@
   "font": "字体",
   "font_size": "文字大小",
   "theme": "主题",
+  "theme_system": "跟随系统",
   "theme_light": "白色",
   "theme_dark": "深色",
   "theme_black": "黑色（纯黑）",

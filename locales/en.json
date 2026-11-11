@@ -110,6 +110,7 @@
   "font": "Font",
   "font_size": "Text size",
   "theme": "Theme",
+  "theme_system": "Follow system",
   "theme_light": "Light",
   "theme_dark": "Dark",
   "theme_black": "Black (pure black)",

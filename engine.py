@@ -54,13 +54,50 @@ NO_WINDOW = subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
 FRIDA_IOS_DUMP_URL = 'https://github.com/AloneMonkey/frida-ios-dump'
 FRIDA_SERVER_PATHS = ('/usr/sbin/frida-server', '/var/jb/usr/sbin/frida-server')
 
-THEME_LIGHT, THEME_DARK, THEME_BLACK = 'light', 'dark', 'black'
-THEMES = (THEME_LIGHT, THEME_DARK, THEME_BLACK)
+THEME_SYSTEM, THEME_LIGHT, THEME_DARK, THEME_BLACK = 'system', 'light', 'dark', 'black'
+THEMES = (THEME_SYSTEM, THEME_LIGHT, THEME_DARK, THEME_BLACK)
 
 
 def theme_setting(value):
-    """A theme name from a settings file or a variable; anything unknown is the default, light."""
-    return value if value in THEMES else THEME_LIGHT
+    """A theme name from a settings file or a variable; anything unknown is the default, the system's."""
+    return value if value in THEMES else THEME_SYSTEM
+
+
+def system_theme():
+    """THEME_DARK when the system is set to dark, otherwise THEME_LIGHT (also when it cannot be told)."""
+    def run(*command):
+        try:
+            if shutil.which(command[0]) is None:
+                return ''
+            done = subprocess.run(command, capture_output=True, text=True, timeout=3, creationflags=NO_WINDOW)
+            return done.stdout.lower() if done.returncode == 0 else ''
+        except (OSError, subprocess.SubprocessError):
+            return ''
+    dark = False
+    try:
+        if IS_WINDOWS:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') as key:
+                dark = winreg.QueryValueEx(key, 'AppsUseLightTheme')[0] == 0
+        elif IS_MACOS:
+            dark = 'dark' in run('defaults', 'read', '-g', 'AppleInterfaceStyle')
+        else:
+            dark = ('dark' in run('gsettings', 'get', 'org.gnome.desktop.interface', 'color-scheme')
+                    or 'dark' in run('gsettings', 'get', 'org.gnome.desktop.interface', 'gtk-theme')
+                    or 'dark' in run('kreadconfig6', '--group', 'General', '--key', 'ColorScheme')
+                    or 'dark' in run('kreadconfig5', '--group', 'General', '--key', 'ColorScheme'))
+    except (OSError, ImportError, ValueError):
+        dark = False
+    return THEME_DARK if dark else THEME_LIGHT
+
+
+def resolve_theme(value):
+    """The theme to draw: a theme setting, with the system's choice looked up for THEME_SYSTEM."""
+    value = theme_setting(value)
+    return system_theme() if value == THEME_SYSTEM else value
+
+
 DEFAULT_FONT_SIZE = 13 if IS_MACOS else 10
 
 # Settings files keep only values that differ from these, so new defaults reach existing users.
@@ -77,7 +114,7 @@ DEFAULTS = dict(
     separate_dirs=True, name_decrypted=app_info.DEFAULT_DECRYPTED_NAME, name_original=app_info.DEFAULT_ORIGINAL_NAME,
     dump_dir=DEFAULT_DUMP_DIR, close_after=True, restart_frida=True, repair=True, dump_method=METHOD_NATIVE,
     frida_method=METHOD_FRIDA_DIRECT, native_helper=native_decrypt.AUTO,
-    lang=i18n.AUTO, font='', font_size=DEFAULT_FONT_SIZE, theme=THEME_LIGHT,
+    lang=i18n.AUTO, font='', font_size=DEFAULT_FONT_SIZE, theme=THEME_SYSTEM,
 )
 
 

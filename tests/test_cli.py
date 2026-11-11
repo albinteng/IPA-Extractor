@@ -198,7 +198,7 @@ class SettingsTests(unittest.TestCase):
         ipa_cli.update_settings({'theme': 'dark', 'port': 22, 'host': '10.0.0.5'})
         with open(self.path, encoding='utf-8') as handle:
             self.assertEqual(json.load(handle), dict(theme='dark', host='10.0.0.5'))
-        ipa_cli.update_settings({'theme': 'light'}, reset=['host'])
+        ipa_cli.update_settings({'theme': 'system'}, reset=['host'])
         with open(self.path, encoding='utf-8') as handle:
             self.assertEqual(json.load(handle), {})
 

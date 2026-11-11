@@ -91,7 +91,7 @@ To use Frida instead, open **Settings → Decryption**, choose *Frida* and click
 
 | Tab | Options |
 | --- | --- |
-| General | Language (*Automatic* follows the system), font (*Automatic* picks the best installed font for the language), text size, theme (*Light*, *Dark*, or *Black* with a pure black background) |
+| General | Language (*Automatic* follows the system), font (*Automatic* picks the best installed font for the language), text size, theme (*Follow system*, the default, picks light or dark when the tool starts; or *Light*, *Dark*, or *Black* with a pure black background). *Follow system* reads the setting of Windows, macOS, or GNOME and KDE on Linux, and uses light where it cannot tell |
 | Output | File name templates (default `{name}_{bundle}_{version}_{type}`), separate output folders (default `output_decrypted` and `output_encrypted` next to the tool) |
 | Decryption | Decryption mode, two kinds. *Native helper* (no Frida; the default) with its helper: *Automatic*, *File mapping* or *Process memory* (each has a tooltip). *Frida* with *Direct decryption mode* (the app's code never runs, except its initialization code when iOS 16 and later need it for encrypted frameworks) or *frida-ios-dump decryption mode* (runs the app) with its own options, greyed out with the other mode: its folder (*Install frida-ios-dump* downloads it when the folder is not set up), decrypt files frida-ios-dump left encrypted (on by default), close each app after decrypting it; and the settings of both Frida modes: restart frida-server and retry on errors, Frida port, *Install Frida dependencies*. What does not belong to the chosen kind is greyed out. |
 
