@@ -14,7 +14,7 @@
   "remember": "비밀번호 기억",
   "connect": "연결",
   "disconnect": "연결 해제",
-  "settings": "설정…",
+  "settings": "설정",
   "state_idle": "연결 안 됨",
   "state_connecting": "연결 중…",
   "state_failed": "실패",

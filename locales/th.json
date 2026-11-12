@@ -14,7 +14,7 @@
   "remember": "จำรหัสผ่าน",
   "connect": "เชื่อมต่อ",
   "disconnect": "ยกเลิกการเชื่อมต่อ",
-  "settings": "การตั้งค่า…",
+  "settings": "การตั้งค่า",
   "state_idle": "ยังไม่ได้เชื่อมต่อ",
   "state_connecting": "กำลังเชื่อมต่อ…",
   "state_failed": "ล้มเหลว",

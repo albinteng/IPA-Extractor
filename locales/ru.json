@@ -11,7 +11,7 @@
   "remember": "Запомнить пароль",
   "connect": "Подключить",
   "disconnect": "Отключить",
-  "settings": "Настройки…",
+  "settings": "Настройки",
   "state_idle": "не подключено",
   "state_connecting": "подключение…",
   "state_failed": "ошибка",

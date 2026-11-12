@@ -11,7 +11,7 @@
   "remember": "Wachtwoord onthouden",
   "connect": "Verbinden",
   "disconnect": "Verbreken",
-  "settings": "Instellingen…",
+  "settings": "Instellingen",
   "state_idle": "niet verbonden",
   "state_connecting": "verbinden…",
   "state_failed": "mislukt",

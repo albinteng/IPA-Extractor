@@ -11,7 +11,7 @@
   "remember": "Remember password",
   "connect": "Connect",
   "disconnect": "Disconnect",
-  "settings": "Settings…",
+  "settings": "Settings",
   "state_idle": "not connected",
   "state_connecting": "connecting…",
   "state_failed": "failed",

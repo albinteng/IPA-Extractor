@@ -419,7 +419,7 @@ class DumpGUI(DumpEngine, tk.Tk):
             # Where the device's address is for the network: the USB device in a row of its own; below it the row of
             # the network layout from the SSH port on, unchanged.
             picker = ttk.Frame(conn)
-            picker.grid(row=0, column=0, columnspan=10, sticky='w')
+            picker.grid(row=0, column=0, columnspan=2 * len(fields) + 3, sticky='w')
             ttk.Label(picker, text=self.t('usb_device')).grid(row=0, column=0, padx=(8, 2), pady=6)
             self.usb_box = ttk.Combobox(picker, textvariable=self.var_usb_label, values=self.usb_labels(),
                                         state='readonly', width=self.usb_width())
@@ -443,7 +443,7 @@ class DumpGUI(DumpEngine, tk.Tk):
                                       state='disabled' if self.ssh_connecting else 'normal')
         self.btn_connect.grid(row=row, column=column + 1, padx=6)
         conn.columnconfigure(column + 2, weight=1)
-        ttk.Button(conn, text=self.t('settings'), command=self.open_settings).grid(row=row, column=column + 3, padx=6)
+        ttk.Button(conn, text=self.t('settings'), command=self.open_settings).grid(row=0, column=column + 3, padx=6)
         if usb:
             self.show_usb_device()
             self.refresh_usb()
@@ -509,8 +509,8 @@ class DumpGUI(DumpEngine, tk.Tk):
                              stretch=key in ('name', 'signer', 'status'))
         scroll = ttk.Scrollbar(table, orient='vertical', command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side='right', fill='y')     # first: the table asks for more width than a small window has
         self.tree.pack(side='left', fill='both', expand=True)
-        scroll.pack(side='right', fill='y')
         # Shown over the empty table while the app list is being read.
         self.lbl_tree_busy = tk.Label(self.tree, text=self.t('tree_loading'), foreground=PALETTE['muted'],
                                      background=ttk.Style().lookup('Treeview', 'background') or 'white',

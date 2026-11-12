@@ -11,7 +11,7 @@
   "remember": "Mémoriser le mot de passe",
   "connect": "Connecter",
   "disconnect": "Déconnecter",
-  "settings": "Paramètres…",
+  "settings": "Paramètres",
   "state_idle": "non connecté",
   "state_connecting": "connexion…",
   "state_failed": "échec",

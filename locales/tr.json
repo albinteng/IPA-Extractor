@@ -11,7 +11,7 @@
   "remember": "Parolayı hatırla",
   "connect": "Bağlan",
   "disconnect": "Bağlantıyı kes",
-  "settings": "Ayarlar…",
+  "settings": "Ayarlar",
   "state_idle": "bağlı değil",
   "state_connecting": "bağlanıyor…",
   "state_failed": "başarısız",

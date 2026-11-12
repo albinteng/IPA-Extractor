@@ -125,6 +125,14 @@ class WindowTests(unittest.TestCase):
         self.assertIn('IP', gui.t('conn_ssh_tip'))
         self.assertIn('usbmuxd', gui.t('conn_usb_tip'))
 
+    def test_the_app_list_keeps_its_scrollbar_in_a_small_window(self):
+        self.gui.deiconify()
+        self.gui.geometry('1000x700')
+        self.gui.update()
+        self.gui.update()
+        scroll = [w for w in self.gui.tree.master.winfo_children() if w.winfo_class() == 'TScrollbar'][0]
+        self.assertGreater(scroll.winfo_width(), 8)
+
     def test_the_usb_device_is_above_the_account_row_and_its_box_as_wide_as_its_text(self):
         gui = self.gui
         with mock.patch.object(engine.usbmux, 'list_devices', return_value=[]):
@@ -132,11 +140,14 @@ class WindowTests(unittest.TestCase):
             gui.change_connection('usb')
         box = gui.usb_box
         self.assertEqual(box.grid_info()['row'], 0)                      # the device on top, with Refresh
-        row = gui.btn_connect.grid_info()['row']                         # below: account, Remember, Connect, Settings
+        row = gui.btn_connect.grid_info()['row']                         # below: account, Remember, Connect
         self.assertEqual(row, 1)
-        for label in ('ssh_port', 'user', 'password', 'remember', 'settings'):
+        for label in ('ssh_port', 'user', 'password', 'remember'):
             widget = label_with(gui, gui.t(label))
             self.assertEqual(widget.grid_info()['row'], row, label)
+        settings = label_with(gui, gui.t('settings')).grid_info()      # Settings stays top right, as in the network layout
+        self.assertEqual(settings['row'], 0)
+        self.assertGreater(settings['column'], gui.btn_connect.grid_info()['column'])
         self.assertNotIn('e', box.grid_info().get('sticky', ''))       # it does not stretch across the window
         self.assertEqual(int(box.cget('width')), 24)                     # nothing attached: the minimum
         phone = engine.usbmux.Device(1, '00008030-0014394602E0802E')

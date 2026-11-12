@@ -11,7 +11,7 @@
   "remember": "Nhớ mật khẩu",
   "connect": "Kết nối",
   "disconnect": "Ngắt kết nối",
-  "settings": "Cài đặt…",
+  "settings": "Cài đặt",
   "state_idle": "chưa kết nối",
   "state_connecting": "đang kết nối…",
   "state_failed": "thất bại",

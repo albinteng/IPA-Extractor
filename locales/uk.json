@@ -11,7 +11,7 @@
   "remember": "Запам’ятати пароль",
   "connect": "Під’єднати",
   "disconnect": "Від’єднати",
-  "settings": "Налаштування…",
+  "settings": "Налаштування",
   "state_idle": "не під’єднано",
   "state_connecting": "під’єднання…",
   "state_failed": "помилка",

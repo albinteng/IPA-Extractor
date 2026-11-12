@@ -3,7 +3,7 @@
 """The part of IPA Extractor that needs no window: settings, the SSH connection, and DumpEngine, which copies and
 decrypts apps. The window (ipa_extractor.py) and the command line (ipa_cli.py) both build on it; it never imports tkinter."""
 
-__version__ = '3.0'
+__version__ = '4.0'
 APP_NAME = 'IPA Extractor'
 
 import contextlib

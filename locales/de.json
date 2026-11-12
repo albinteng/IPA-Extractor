@@ -11,7 +11,7 @@
   "remember": "Passwort speichern",
   "connect": "Verbinden",
   "disconnect": "Trennen",
-  "settings": "Einstellungen…",
+  "settings": "Einstellungen",
   "state_idle": "nicht verbunden",
   "state_connecting": "verbinden…",
   "state_failed": "fehlgeschlagen",
