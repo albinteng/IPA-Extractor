@@ -2,7 +2,7 @@
 
 # IPA Extractor
 
-A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi (SSH), in two ways:
+A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi or a USB cable (SSH), in two ways:
 
 - **Original IPA** – packs the installed app as-is. Executables stay FairPlay-encrypted, so the IPA installs only on devices using the purchasing Apple ID (or with AppSync). Needs nothing but SSH, and works for apps that can no longer launch, such as 32-bit apps on iOS 11+.
 - **Decrypted IPA** – an IPA with decrypted executables, made in one of two ways (*Settings → Decryption*): with two small helper programs run on the device, no Frida at all (*Native helper*, the default), or with Frida (*Frida*), which copies the installed app and decrypts its files on the device without running any of its code (*Direct decryption mode*) or launches the app and dumps it with [frida-ios-dump](https://github.com/AloneMonkey/frida-ios-dump) (*frida-ios-dump decryption mode*). Frida mode needs `frida-server` on the device.
@@ -27,7 +27,8 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi (
 **Device**
 
 - A jailbroken iPhone or iPad, rootful (e.g. unc0ver, checkra1n, palera1n rootful) or rootless (e.g. Dopamine, palera1n rootless).
-- An SSH server, on the same network as the computer.
+- An SSH server on the device, reachable over the network, or over a USB cable (Settings → Connection).
+- To connect by USB: usbmuxd on the computer, which iTunes or the Apple Devices app brings on Windows, macOS has, and Linux gets from the `usbmuxd` package. The device must be unlocked (and trusted, if it asks).
 - For decrypted IPAs in *Frida*: `frida-server` from the official Frida repository.
 - For decrypted IPAs in *Native helper* (the default): nothing but SSH, a jailbreak that runs ad-hoc signed (ldid) programs as root, and an arm64 device. `sudo` is used when you log in as `mobile`.
 
@@ -60,11 +61,12 @@ The `frida` used on the computer must match the major version of frida-server on
 ### Linux
 
 ```sh
-sudo apt install python3-tk python3-venv   # Debian/Ubuntu; Fedora: sudo dnf install python3-tkinter
 ./ipa_extractor.sh
 ```
 
-On first start the tool offers to install its Python packages into `./.venv`, including [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) for a modern look. For Chinese, Japanese or Korean UI text, install a CJK font such as `fonts-noto-cjk`.
+If Python's `venv` or `tkinter` (the window needs it) is missing, the script says so and, in a terminal, offers the command that installs it (Debian/Ubuntu `sudo apt-get install -y python3-venv python3-tk`, Fedora `sudo dnf install -y python3-tkinter`, and likewise for Arch, openSUSE) and runs it only if you answer `y`. The command line needs neither tkinter nor a window: with any argument the script installs the Python packages it lacks (`paramiko`, `cryptography`) into `./.venv` by itself.
+
+On first start the window offers to install its Python packages into `./.venv`, including [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) for a modern look. For Chinese, Japanese or Korean UI text, install a CJK font such as `fonts-noto-cjk`.
 
 ### macOS
 
@@ -79,7 +81,7 @@ brew install python python-tk   # or use the python.org installer, which include
 
 ### Usage
 
-1. Enter the device IP, SSH account (`root` or `mobile`, see above) and password, then click **Connect**. The app list loads over SSH; Frida connects as well in *Frida* (with frida-ios-dump, once its folder is set up). The Frida status beside SSH is shown only then, not with *Native helper*.
+1. Enter the device IP, SSH account (`root` or `mobile`, see above) and password, then click **Connect**. With *Connection* set to *USB cable* in Settings, choose the device in the USB device box (the one attached is chosen for you; **Refresh** lists them again) instead of entering an IP. The app list loads over SSH; Frida connects as well in *Frida* (with frida-ios-dump, once its folder is set up). The Frida status beside SSH is shown only then, not with *Native helper*.
 2. Check the apps you want (click ☐, double-click a row, or select rows and press Space).
 3. Click **Extract original IPA** or **Extract decrypted IPA**.
 
@@ -92,10 +94,11 @@ To use Frida instead, open **Settings → Decryption**, choose *Frida* and click
 | Tab | Options |
 | --- | --- |
 | General | Language (*Automatic* follows the system), font (*Automatic* picks the best installed font for the language), text size, theme (*Follow system*, the default, picks light or dark when the tool starts; or *Light*, *Dark*, or *Black* with a pure black background). *Follow system* reads the setting of Windows, macOS, or GNOME and KDE on Linux, and uses light where it cannot tell |
-| Output | File name templates (default `{name}_{bundle}_{version}_{type}`), separate output folders (default `output_decrypted` and `output_encrypted` next to the tool) |
+| Output | File name templates (default `{name}_{bundle}_{version}_{type}`), separate output folders (off by default: one folder, `output` next to the tool) |
 | Decryption | Decryption mode, two kinds. *Native helper* (no Frida; the default) with its helper: *Automatic*, *File mapping* or *Process memory* (each has a tooltip). *Frida* with *Direct decryption mode* (the app's code never runs, except its initialization code when iOS 16 and later need it for encrypted frameworks) or *frida-ios-dump decryption mode* (runs the app) with its own options, greyed out with the other mode: its folder (*Install frida-ios-dump* downloads it when the folder is not set up), decrypt files frida-ios-dump left encrypted (on by default), close each app after decrypting it; and the settings of both Frida modes: restart frida-server and retry on errors, Frida port, *Install Frida dependencies*. What does not belong to the chosen kind is greyed out. |
+| Connection | How the computer reaches the device: *SSH over the network* (the default; the device IP is entered in the main window) or *SSH over a USB cable* (the main window then shows a USB device box with each device's name, model and iOS version, and a **Refresh** button, instead of the IP; the SSH port, account and password stay) |
 
-Defaults: SSH port 22 with no account, *Native helper* with the helper on *Automatic* (and *Direct decryption mode* as the Frida mode to return to), Frida port 27042, output folders `output_decrypted` and `output_encrypted` next to the tool, frida-ios-dump in a `frida-ios-dump` folder beside the tool's folder, *Automatic* language and font, text size 10 (13 on macOS), *Light* theme.
+Defaults: SSH port 22 with no account, *Native helper* with the helper on *Automatic* (and *Direct decryption mode* as the Frida mode to return to), Frida port 27042, one output folder `output` next to the tool (separate folders are off), frida-ios-dump in a `frida-ios-dump` folder beside the tool's folder, *Automatic* language and font, text size 10 (13 on macOS), *Light* theme.
 
 `{type}` is `encrypted` (original IPA) or `original` (original IPA whose executable was never encrypted). For decrypted IPAs it follows a check of every executable in the IPA (main app, frameworks, app extensions, Watch app), done on the computer after each extraction: `decrypted` (all decrypted), `partial-decrypted-<architectures>` (some slices are still encrypted: the name lists the architectures of the main executable that are decrypted, e.g. `partial-decrypted-armv7` or `partial-decrypted-armv6-armv7`; the log and the details pane list the files and why) or `partial-decrypted` (no decrypted architecture to name). *Check partially decrypted apps* selects these apps.
 
@@ -109,6 +112,7 @@ Everything the window does is also available without it, for scripts and servers
 
 ```
 python ipa_cli.py apps -H 192.168.1.20 -u root          list the apps (add --json for scripts)
+python ipa_cli.py apps --usb -u mobile                  the same over the USB cable (devices lists the UDIDs for --udid)
 python ipa_cli.py extract com.example.app               original IPAs
 python ipa_cli.py decrypt --all --non-apple             decrypted IPAs, every app the filters let through
 python ipa_cli.py decrypt --mode frida-direct com.example.app
@@ -122,6 +126,7 @@ python ipa_cli.py config show                           the settings; config set
 | `extract`, `decrypt` | Original or decrypted IPAs. Pick apps by bundle ID, `--all`, `--search`, `--unextracted` (no IPA in the output folders yet) or `--partial` (decrypted IPA still partly encrypted). `-o DIR`, `--name TEMPLATE`, `--overwrite`, `--skip-existing`, `--json` |
 | `decrypt` options | `--mode native` / `frida-direct` / `frida-ios-dump`, `--helper auto` / `mremap` / `memory`, `--frida-port`, `--dump-dir`, `--install-frida`, `--repair` / `--no-repair`, `--close-after` / `--keep-open`, `--restart-frida` / `--no-restart-frida` (all default to the settings); `--helper mremap` is refused on iOS 16 and later |
 | `verify` | Checks every executable of IPAs, like `ipa_verify.py` |
+| `devices` | Lists the devices attached by USB, one per line: UDID, name, model, iOS version (`--json` for scripts; `cut -f1` gives the UDIDs). Every command that connects takes `--usb` (the cable instead of the network), `--udid UDID` (which device; implies `--usb`) and `--ssh` (the network, whatever the setting says); the `connection` and `usb_device` settings are the defaults |
 | `install-frida`, `install-frida-ios-dump` | What the window's *Install Frida dependencies* and *Install frida-ios-dump* buttons do |
 | `config` | `show`, `set KEY VALUE`, `reset KEY...`, `keys`, `path`: the same settings as the window, including the theme |
 
@@ -145,6 +150,8 @@ Each language is a JSON file in `locales/` named by its language tag, e.g. `ja.j
 | File | Purpose |
 | --- | --- |
 | `ipa_extractor.py` | Tkinter GUI |
+| `device_models.json` | Marketing names of iPhone, iPad and iPod models by identifier (iPhone12,1 is iPhone 11); radio and region variants share a name. A model that is not listed shows its identifier, so add a line for a new device |
+| `usbmux.py` | A small usbmuxd client: lists the devices on USB and carries SSH through the cable (like `iproxy`, without needing it) |
 | `engine.py` | What needs no window: settings, SSH, and the engine (`DumpEngine`) that copies and decrypts apps; shared by the GUI and the CLI, never imports tkinter |
 | `ipa_cli.py` | Command line: the same features without the window |
 | `ipa_extractor.bat`, `ipa_extractor.sh` | Launchers for Windows and Linux/macOS |

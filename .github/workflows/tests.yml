@@ -1,0 +1,59 @@
+name: tests
+# Runs the unit tests on Windows, macOS and Linux (the window tests need a display: Linux gets xvfb), then, as
+# a separate step, asks the real usbmuxd of the machine for its device list, which the fake daemon of the unit tests
+# cannot prove: the framing has to be one the real daemon accepts.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install packages
+        run: python -m pip install 'paramiko>=3' cryptography
+      - name: Install xvfb and usbmuxd (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb python3-tk usbmuxd
+      - name: Unit tests (Linux, with a virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m unittest discover -s tests -v
+      - name: Unit tests
+        if: runner.os != 'Linux'
+        run: python -m unittest discover -s tests -v
+
+  real-usbmuxd:
+    # macOS always has a usbmuxd; Linux has one once the package's daemon runs. Neither has a device here: the answer is
+    # an empty list, but the request and the reply have to go through the real daemon. Kept apart (and allowed to fail)
+    # so that a runner without a working usbmuxd does not fail the unit tests above.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Start usbmuxd (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y usbmuxd
+          sudo usbmuxd --foreground --verbose > usbmuxd.log 2>&1 &
+          for i in $(seq 1 20); do [ -S /var/run/usbmuxd ] && break; sleep 0.5; done
+          ls -l /var/run/usbmuxd || { cat usbmuxd.log; exit 1; }
+      - name: Ask the real usbmuxd for its devices
+        env:
+          IPA_REAL_USBMUXD: '1'
+        run: python -m unittest tests.test_usbmux.UsbmuxTests.test_the_real_usbmuxd_answers_the_device_list -v

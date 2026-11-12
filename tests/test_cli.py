@@ -152,10 +152,11 @@ class NameAndOutputTests(unittest.TestCase):
 
     def test_output_folder_defaults(self):
         cli = make_cli('extract', 'com.a.alpha')
-        self.assertEqual(cli.output_dir('extract'), core.DEFAULTS['extract_dir'])
-        self.assertEqual(cli.output_dir('dump'), core.DEFAULTS['outdir'])
-        cli.settings['separate_dirs'] = False
+        self.assertFalse(core.DEFAULTS['separate_dirs'])                # one folder unless Settings separate them
         self.assertEqual(cli.output_dir('extract'), core.DEFAULTS['outdir'])
+        self.assertEqual(cli.output_dir('dump'), core.DEFAULTS['outdir'])
+        cli.settings['separate_dirs'] = True
+        self.assertEqual(cli.output_dir('extract'), core.DEFAULTS['extract_dir'])
         self.assertEqual(make_cli('extract', 'a', '-o', 'x').output_dir('extract'), 'x')
 
 
@@ -290,6 +291,14 @@ class EngineTests(unittest.TestCase):
             self.assertFalse(name in vars(ipa_extractor.DumpGUI), name)
         self.assertTrue(issubclass(ipa_cli.Cli, core.DumpEngine))
         self.assertTrue(issubclass(ipa_extractor.DumpGUI, core.DumpEngine))
+
+    def test_the_launcher_script_runs_the_command_line_without_tkinter(self):
+        code = ("import sys, runpy; sys.modules['tkinter'] = None; sys.argv = ['ipa_extractor.py', 'config', 'path']; "
+                "runpy.run_path('ipa_extractor.py', run_name='__main__')")      # as `python ipa_extractor.py config path`
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        done = subprocess.run([sys.executable, '-c', code], cwd=here, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(done.stdout.strip().endswith('.json'))
 
     def test_the_command_line_runs_without_tkinter(self):
         code = ("import sys; sys.modules['tkinter'] = None; import ipa_cli; "

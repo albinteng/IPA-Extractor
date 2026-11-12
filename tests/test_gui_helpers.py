@@ -12,6 +12,11 @@ from pathlib import Path
 import app_info
 
 ROOT = Path(__file__).resolve().parent.parent
+try:
+    import tkinter
+except ImportError:
+    tkinter = None
+needs_window = unittest.skipIf(tkinter is None, 'tkinter is not installed (the window needs it, the command line does not)')
 
 
 def code_directory(identifier, team):
@@ -140,6 +145,7 @@ class FridaVersionTests(unittest.TestCase):
                          [os.path.join('versions', '17.24.3'), 'elsewhere'])
         self.assertEqual(frida_versions.env('16.6.6', {}, root='v')['PYTHONPATH'], os.path.join('v', '16.6.6'))
 
+    @needs_window
     def test_gui_does_not_import_frida(self):
         code = 'import sys, ipa_extractor; print("frida" in sys.modules)'
         output = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True,
@@ -360,6 +366,7 @@ class ThemeTests(unittest.TestCase):
             run.return_value.returncode = 1                             # no AppleInterfaceStyle: light
             self.assertEqual(engine.system_theme(), 'light')
 
+    @needs_window
     def test_every_theme_defines_every_colour_and_black_is_black(self):
         import ipa_extractor
         keys = set(ipa_extractor.PALETTES['light'])
@@ -434,6 +441,7 @@ class GatedLaunchTests(unittest.TestCase):
               '  4 T    xpcproxy UIKitApplication:com.foobar[11aa]\n')
         self.assertEqual(engine.gated_launches(ps, 'com.foo'), ([1, 2], [3, 4]))
 
+    @needs_window
     def test_release_gated_resumes_frida_server_and_services(self):
         import ipa_extractor
         from unittest import mock
@@ -446,6 +454,7 @@ class GatedLaunchTests(unittest.TestCase):
         commands = [call.args[1] for call in gui._as_root.call_args_list]
         self.assertEqual([c for c in commands if c.startswith('kill')], ['kill -CONT 812', 'kill -9 5', 'kill -CONT 6'])
 
+    @needs_window
     def test_release_gated_survives_ssh_errors(self):
         import ipa_extractor
         from unittest import mock
@@ -474,6 +483,7 @@ class DumpMethodTests(unittest.TestCase):
         self.assertEqual(engine.frida_method_setting(None, engine.METHOD_NATIVE), engine.METHOD_FRIDA_DIRECT)
         self.assertEqual(engine.frida_method_setting(engine.METHOD_NATIVE, engine.METHOD_NATIVE), engine.METHOD_FRIDA_DIRECT)
 
+    @needs_window
     def test_native_method_needs_no_frida_and_no_frida_ios_dump(self):
         import engine
         import ipa_extractor
@@ -871,6 +881,7 @@ class ExtractTests(unittest.TestCase):
                 ipa_extract.extract_ipa(FakeSSH(self.tar(link)), '/c/U/X.app', os.path.join(folder, 'x.ipa'))
             self.assertEqual(os.listdir(folder), [])  # no partial IPA left behind
 
+@needs_window
 class WrapTextTests(unittest.TestCase):
     class Font:
         def measure(self, text):

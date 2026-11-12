@@ -1,6 +1,7 @@
 __pycache__/
 .venv/
 settings.json
+output/
 output_decrypted/
 output_encrypted/
 frida_versions/

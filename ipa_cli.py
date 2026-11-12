@@ -29,6 +29,7 @@ import i18n
 import ipa_verify
 import native_decrypt
 import remote
+import usbmux
 
 # The engine needs no window and no tkinter: the command line runs on a server without Tk.
 import engine as core
@@ -64,6 +65,7 @@ class Cli(core.DumpEngine):
         self.lang = i18n.resolve(self.locales, getattr(args, 'lang', None) or self.settings['lang'])
         self.quiet = getattr(args, 'quiet', False)
         self.ssh = self.tunnel = self.frida_version = self.device_os = None
+        self.usb_tunnel = None     # the USB connection's local end, when the device is reached by cable
         self.host, self.port, self.user, self.password = '', 22, '', ''
         self.working = False       # a batch is running: only then does Ctrl-C mean "finish this file and stop"
         self.generation = 0
@@ -138,17 +140,28 @@ class Cli(core.DumpEngine):
         self.log(Text('log_cancel'))
 
     # ------------------------------------------------------------- connection
+    def connection_mode(self):
+        """(core.CONNECTION_SSH or CONNECTION_USB, the USB device's serial or ''), from the options or the settings."""
+        args, c = self.args, self.settings
+        if getattr(args, 'ssh', False):
+            return core.CONNECTION_SSH, ''
+        if getattr(args, 'usb', False) or getattr(args, 'udid', None):
+            return core.CONNECTION_USB, (args.udid or c['usb_device']).strip()
+        return core.connection_setting(c['connection']), c['usb_device'].strip()
+
     def connection(self):
         """(host, port, user, password) from the options, falling back to the window's settings."""
         args, c = self.args, self.settings
+        usb = self.connection_mode()[0] == core.CONNECTION_USB
         host = (args.host or c['host']).strip()
         user = (args.user or c['user']).strip()
         try:
             port = int(args.port or c['port'])
         except (TypeError, ValueError):
             raise CliError('the SSH port must be a number')
-        if not host:
-            raise CliError('no device address: use --host, or set it with "config set host ADDRESS"')
+        if not host and not usb:
+            raise CliError('no device address: use --host, or set it with "config set host ADDRESS"; '
+                           'or use --usb to reach the device by cable')
         if not user:
             raise CliError('no SSH account: use --user (root, or mobile on rootless jailbreaks)')
         password = args.password
@@ -159,17 +172,20 @@ class Cli(core.DumpEngine):
         if password is None:
             if not sys.stdin.isatty():
                 raise CliError('no SSH password: use --password, the IPA_PASSWORD variable, or run in a terminal')
-            password = getpass.getpass('SSH password for {}@{}: '.format(user, host))
+            password = getpass.getpass('SSH password for {}@{}: '.format(user, host or 'USB'))
         return host, port, user, password
 
     def connect(self):
-        host, self.port, self.user, self.password = self.connection()
-        port = self.port
-        self.log(Text('log_ssh_connecting', user=self.user, host=host, port=port))
+        host, port, self.user, self.password = self.connection()
+        mode, serial = self.connection_mode()
+        label = ('USB ' + serial).strip() if mode == core.CONNECTION_USB else host
+        self.log(Text('log_ssh_connecting', user=self.user, host=label, port=port))
         try:
-            self.ssh = core.open_ssh(host, port, self.user, self.password, self.log)
+            self.ssh, address, self.usb_tunnel = core.open_device(
+                mode, host, port, self.user, self.password, self.log, usb_device=serial)
         except Exception as error:
-            raise CliError(self.render(Text('log_ssh_failed', error=error)))
+            raise CliError(self.render(Text('log_ssh_failed', error=core.error_text(error))))
+        self.host, self.port = address      # what SSH really connects to: the local end of the USB tunnel, or the device
         self.log(Text('log_ssh_ok'))
 
     def close(self):
@@ -177,6 +193,8 @@ class Cli(core.DumpEngine):
             self.tunnel.close()
         if self.ssh is not None:
             self.ssh.close()
+        if self.usb_tunnel is not None:
+            self.usb_tunnel.close()
 
     # ------------------------------------------------------------------- apps
     def load_apps(self):
@@ -545,6 +563,23 @@ def finish(cli, mode, jobs, outdir, names):
     return EXIT_OK
 
 
+def cmd_devices(cli):
+    try:
+        devices = [usbmux.describe(device) for device in usbmux.list_devices()]
+    except usbmux.UsbmuxError as error:
+        raise CliError(str(error))
+    if cli.args.json:
+        print(json.dumps([dict(udid=d.serial, name=d.name, model=d.model, model_name=d.model_name, ios=d.version)
+                          for d in devices], ensure_ascii=False, indent=2))
+    else:
+        for device in devices:      # tab separated, the UDID first: `cut -f1` gives what --udid takes
+            print('\t'.join((device.serial, device.name, device.model_name,
+                             device.version and 'iOS ' + device.version)).rstrip('\t'))
+    if not devices:
+        print('no device on USB', file=sys.stderr)
+    return EXIT_OK if devices else EXIT_FAILED
+
+
 def cmd_extract(cli):
     cli.connect()
     cli.load_apps()
@@ -633,6 +668,9 @@ def convert_setting(key, text):
     elif key == 'theme':
         if text not in core.THEMES:
             raise CliError('theme must be one of: ' + ', '.join(core.THEMES))
+    elif key == 'connection':
+        if text not in core.CONNECTIONS:
+            raise CliError('connection must be one of: ' + ', '.join(core.CONNECTIONS))
     elif key == 'lang':
         if text != i18n.AUTO and text not in i18n.load_locales():
             raise CliError('lang must be auto or one of: ' + ', '.join(sorted(i18n.load_locales())))
@@ -719,6 +757,10 @@ def build_parser():
     def device(p):
         g = p.add_argument_group('device')
         g.add_argument('-H', '--host', help='device address (default: the setting)')
+        g.add_argument('--usb', action='store_true', help='reach the device through the USB cable instead of the network '
+                       '(default: the connection setting)')
+        g.add_argument('--udid', metavar='UDID', help='the USB device (--usb is implied); with none, the attached one')
+        g.add_argument('--ssh', action='store_true', help='reach the device over the network, whatever the setting says')
         g.add_argument('-P', '--port', help='SSH port (default: the setting, 22)')
         g.add_argument('-u', '--user', help='SSH account: root, or mobile on rootless jailbreaks (default: the setting)')
         g.add_argument('-p', '--password', help='SSH password; or set IPA_PASSWORD; or you are asked; or the saved one')
@@ -752,6 +794,10 @@ def build_parser():
         g.add_argument('--overwrite', action='store_true', help='replace IPAs that exist')
         g.add_argument('--skip-existing', action='store_true', help='leave apps out whose IPA exists')
         g.add_argument('--json', action='store_true', help='print the results as JSON')
+
+    p = sub.add_parser('devices', help='list the devices attached by USB (their UDIDs, for --udid)')
+    p.add_argument('--json', action='store_true')
+    p.set_defaults(run=cmd_devices)
 
     p = sub.add_parser('extract', help='extract original IPAs (no decryption)')
     batch(p)

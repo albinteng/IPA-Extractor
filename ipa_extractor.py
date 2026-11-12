@@ -2,6 +2,14 @@
 # -*- coding: utf-8 -*-
 """IPA Extractor: Tkinter GUI that pulls original or decrypted IPAs off a jailbroken device over SSH."""
 
+import sys
+
+if __name__ == '__main__' and len(sys.argv) > 1:
+    # Any argument means the command line (ipa_cli.py), so ./ipa_extractor.sh apps works too. Decided before tkinter
+    # is imported: a server without it must still get here.
+    import ipa_cli
+    sys.exit(ipa_cli.main())
+
 import json
 import os
 import queue
@@ -22,13 +30,14 @@ import i18n
 import ipa_verify
 import native_decrypt
 import remote
+import usbmux
 from engine import (
-    APP_NAME, ASSETS, BASE_PACKAGES, DEFAULTS, DEFAULT_DUMP_DIR, DEFAULT_FONT_SIZE, DUMP_KINDS, FRIDA_IOS_DUMP_URL,
+    APP_NAME, ASSETS, CONNECTION_SSH, CONNECTION_USB, CONNECTIONS, BASE_PACKAGES, DEFAULTS, DEFAULT_DUMP_DIR, DEFAULT_FONT_SIZE, DUMP_KINDS, FRIDA_IOS_DUMP_URL,
     IS_MACOS, IS_WINDOWS, MAX_CONSECUTIVE_FRIDA_ERRORS, METHOD_FRIDA_DIRECT, METHOD_FRIDA_IOS_DUMP, METHOD_NATIVE,
     NO_WINDOW, THEMES, THEME_BLACK, THEME_DARK, THEME_LIGHT, DumpEngine, Indented, SSHTunnel, Text, __version__,
-    decrypt_method, download_frida_ios_dump, dump_dir_status, dump_method_setting, frida_method_setting,
+    connection_setting, decrypt_method, download_frida_ios_dump, error_text, dump_dir_status, dump_method_setting, frida_method_setting,
     frida_releases, frida_server_status, ios_major, is_apple_app, is_user_app, load_config, major, natural_key,
-    open_ssh, pip_install, probe_frida, resolve_theme, script_dir, theme_setting)
+    open_device, pip_install, probe_frida, resolve_theme, script_dir, theme_setting)
 
 CHECKED, UNCHECKED = '☑', '☐'
 # UI colours per theme (the theme setting). Light keeps the platform's native look; dark and black
@@ -170,6 +179,13 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.helper_warned = False
         self.overall = (0, None)
         self.var_host = tk.StringVar(value=c['host'])
+        self.var_connection = tk.StringVar(value=connection_setting(c['connection']))
+        self.var_usb_device = tk.StringVar(value=c['usb_device'])
+        self.usb_devices = []       # the usbmux.Device objects usbmuxd lists, named
+        self.usb_listed = False     # whether usbmuxd has answered yet
+        self.var_usb_label = tk.StringVar()     # what the USB device box shows (the name); var_usb_device keeps the UDID
+        self.applied_connection = connection_setting(c['connection'])     # the one the window is built for
+        self.usb_tunnel = self.endpoint = None      # a USB connection's local end; the (host, port) SSH really uses
         self.var_port = tk.StringVar(value=str(c['port']))
         self.var_user = tk.StringVar(value=c['user'])
         self.var_password = tk.StringVar(value=c.get('password', ''))
@@ -215,7 +231,11 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.protocol('WM_DELETE_WINDOW', self.on_close)
         self.after(100, self._drain_events)
         self.after(3000, self._watch_connection)
-        self.log(Text('log_ready'))
+        self.log(self.ready_text())
+
+    def ready_text(self):
+        """What to do first, for the connection in use."""
+        return Text('log_ready_usb' if connection_setting(self.var_connection.get()) == CONNECTION_USB else 'log_ready')
 
     def t(self, key, **params):
         template = self.locales[self.lang].get(key) or self.locales[i18n.FALLBACK].get(key, key)
@@ -245,11 +265,12 @@ class DumpGUI(DumpEngine, tk.Tk):
 
     def apply_theme(self):
         """Light: native theme on Windows and macOS, Sun Valley (sv-ttk) on Linux instead of Tk's dated
-        default. Dark and black: "clam" restyled with the palette (black is a pure black background)."""
+        default. Dark and black (and light without sv-ttk): "clam" restyled with the palette (black is a pure black background)."""
         name = resolve_theme(self.var_theme.get())     # the system's choice is read here, once per start or change
         PALETTE.clear()
         PALETTE.update(PALETTES[name])
         if name == THEME_LIGHT:
+            clam_light = False
             if IS_WINDOWS:
                 self.style.theme_use('vista')
             elif IS_MACOS:
@@ -259,26 +280,32 @@ class DumpGUI(DumpEngine, tk.Tk):
                     import sv_ttk
                     sv_ttk.set_theme('light', self)
                 except ImportError:
-                    self.style.theme_use('clam')
-            # Classic Tk widgets (Text, Canvas) do not follow ttk themes. Sun Valley does not report its
-            # colours through style lookups, so read its palette directly.
-            try:
-                background = self.tk.call('set', '::ttk::theme::sv_light::colors(-bg)')
-            except tk.TclError:
-                background = self.style.lookup('TFrame', 'background')
-            self.theme_background = background or self.cget('background')
-            if getattr(self, 'dark_options', False):
-                self.option_clear()
-                self.dark_options = False
+                    clam_light = True
+            if clam_light:
+                # Without sv-ttk the light theme is "clam" in the light palette: bare "clam" would keep the dark
+                # styles an earlier theme configured on it.
+                self._style_clam(PALETTE)
+                self.theme_background = PALETTE['bg']
+            else:
+                # Classic Tk widgets (Text, Canvas) do not follow ttk themes. Sun Valley does not report its
+                # colours through style lookups, so read its palette directly.
+                try:
+                    background = self.tk.call('set', '::ttk::theme::sv_light::colors(-bg)')
+                except tk.TclError:
+                    background = self.style.lookup('TFrame', 'background')
+                self.theme_background = background or self.cget('background')
+                if getattr(self, 'dark_options', False):
+                    self.option_clear()
+                    self.dark_options = False
         else:
-            self._style_dark(PALETTE)
+            self._style_clam(PALETTE)
             self.theme_background = PALETTE['bg']
         self.configure(background=self.theme_background)
         self.style.configure('TNotebook.Tab', padding=(18, 7))
         if hasattr(self, 'installed_fonts'):
             self.apply_fonts()
 
-    def _style_dark(self, p):
+    def _style_clam(self, p):
         style = self.style
         style.theme_use('clam')
         style.configure('.', background=p['bg'], foreground=p['fg'], fieldbackground=p['field'],
@@ -385,23 +412,43 @@ class DumpGUI(DumpEngine, tk.Tk):
 
         conn = ttk.LabelFrame(root, text=self.t('device'))
         conn.pack(fill='x', padx=8, pady=(8, 4))
-        fields = (('host', self.var_host, 16), ('ssh_port', self.var_port, 6),
-                  ('user', self.var_user, 8), ('password', self.var_password, 14))
-        for column, (label, var, width) in enumerate(fields):
-            ttk.Label(conn, text=self.t(label)).grid(row=0, column=column * 2, padx=(8, 2), pady=6)
+        usb = connection_setting(self.var_connection.get()) == CONNECTION_USB
+        fields = [('ssh_port', self.var_port, 6), ('user', self.var_user, 8), ('password', self.var_password, 14)]
+        row = 0
+        if usb:
+            # Where the device's address is for the network: the USB device in a row of its own; below it the row of
+            # the network layout from the SSH port on, unchanged.
+            picker = ttk.Frame(conn)
+            picker.grid(row=0, column=0, columnspan=10, sticky='w')
+            ttk.Label(picker, text=self.t('usb_device')).grid(row=0, column=0, padx=(8, 2), pady=6)
+            self.usb_box = ttk.Combobox(picker, textvariable=self.var_usb_label, values=self.usb_labels(),
+                                        state='readonly', width=self.usb_width())
+            self.usb_box.grid(row=0, column=1, pady=6)
+            self.usb_box.bind('<<ComboboxSelected>>', self.usb_chosen)
+            ttk.Button(picker, text=self.t('usb_refresh'), command=self.refresh_usb).grid(row=0, column=2, padx=(4, 0))
+            row = 1
+        else:
+            fields.insert(0, ('host', self.var_host, 16))
+        column = 0
+        for label, var, width in fields:
+            ttk.Label(conn, text=self.t(label)).grid(row=row, column=column, padx=(8, 2), pady=6)
             entry = ttk.Entry(conn, textvariable=var, width=width,
                               show='•' if var is self.var_password else '')
-            entry.grid(row=0, column=column * 2 + 1, pady=6)
+            entry.grid(row=row, column=column + 1, pady=6)
             entry.bind('<Return>', lambda e: self.connect())
-        ttk.Checkbutton(conn, text=self.t('remember'), variable=self.var_remember).grid(row=0, column=8, padx=6)
+            column += 2
+        ttk.Checkbutton(conn, text=self.t('remember'), variable=self.var_remember).grid(row=row, column=column, padx=6)
         self.btn_connect = ttk.Button(conn, command=self.toggle_connection,
                                       text=self.t('disconnect' if self.ssh is not None else 'connect'),
                                       state='disabled' if self.ssh_connecting else 'normal')
-        self.btn_connect.grid(row=0, column=9, padx=6)
-        conn.columnconfigure(10, weight=1)
-        ttk.Button(conn, text=self.t('settings'), command=self.open_settings).grid(row=0, column=11, padx=6)
+        self.btn_connect.grid(row=row, column=column + 1, padx=6)
+        conn.columnconfigure(column + 2, weight=1)
+        ttk.Button(conn, text=self.t('settings'), command=self.open_settings).grid(row=row, column=column + 3, padx=6)
+        if usb:
+            self.show_usb_device()
+            self.refresh_usb()
         indicators = ttk.Frame(conn)
-        indicators.grid(row=1, column=0, columnspan=12, padx=2, pady=(0, 6), sticky='w')
+        indicators.grid(row=row + 1, column=0, columnspan=column + 4, padx=2, pady=(0, 6), sticky='w')
         self.ssh_dot, self.ssh_label = self._indicator(indicators, 'SSH')
         self.frida_dot, self.frida_label = self._indicator(indicators, 'Frida')
         self.show_frida_indicator()
@@ -513,7 +560,7 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.log_text.pack(side='left', fill='both', expand=True)
         log_scroll.pack(side='right', fill='y')
         if log_content:
-            self.log_text.insert('end', log_content + '\n')
+            self.log_text.insert('end', log_content)      # already ends with the last line's newline
             self.log_text.see('end')
         self.log_text.configure(state='disabled')
         panes.add(lower, weight=2)
@@ -733,6 +780,18 @@ class DumpGUI(DumpEngine, tk.Tk):
         update_status()
         update_method()
         frida.columnconfigure(1, weight=1)
+
+        connection = ttk.Frame(tabs, padding=12)     # the Connection tab
+        tabs.add(connection, text=self.t('tab_connection'))
+        WrapLabel(connection, text=self.t('connection_help'), foreground=PALETTE['muted'], justify='left').grid(
+            row=0, column=0, sticky='we', pady=(0, 8))
+        ttk.Label(connection, text=self.t('connection')).grid(row=1, column=0, sticky='w')
+        for row, name in enumerate(CONNECTIONS):
+            option = ttk.Radiobutton(connection, text=self.t('conn_' + name), value=name, variable=self.var_connection,
+                                     command=lambda: self.change_connection(self.var_connection.get()))
+            option.grid(row=2 + row, column=0, sticky='w', padx=(24, 0), pady=(4, 0))
+            Tooltip(option, self.t('conn_' + name + '_tip'))
+        connection.columnconfigure(0, weight=1)
         tabs.select(tab)
 
         def close():
@@ -816,6 +875,145 @@ class DumpGUI(DumpEngine, tk.Tk):
             if reopen:
                 self.open_settings()
 
+    def change_connection(self, name):
+        """Switch between SSH over the network and over USB: the device section of the window changes with it."""
+        name = connection_setting(name)
+        previous = self.applied_connection
+        self.var_connection.set(name)
+        if name == previous:
+            return
+        if self.dumping:
+            messagebox.showwarning(self.t('m_busy_t'), self.t('m_busy'))
+            self.var_connection.set(previous)       # the radio button goes back
+            return
+        if self.ssh is not None or self.ssh_connecting:
+            if not messagebox.askyesno(self.t('connection'), self.t('m_conn_switch')):
+                self.var_connection.set(previous)       # the radio button goes back
+                return
+            self.disconnect('state_disconnected')       # the old connection ends here: nothing of it outlives the switch
+        self.applied_connection = name
+        self._save_config()
+        reopen = self.settings_window is not None and self.settings_window.winfo_exists()
+        tab = self.settings_tabs.index('current') if reopen else 0
+        if reopen:
+            self.settings_close()
+        self._build_ui()
+        self.log(self.ready_text())       # what to enter now, once per change
+        if reopen:
+            self.open_settings(tab=tab)
+
+    def usb_labels(self):
+        return [device.label() for device in self.usb_devices]
+
+    def usb_width(self):
+        """Characters the USB device box needs for its longest text: no wider."""
+        return min(56, max([24, len(self.t('usb_none'))] + [len(label) for label in self.usb_labels()]))
+
+    def show_usb_label(self, label, scroll=False):
+        """Put the device's text in the box. What does not fit is cut off by the box; with scroll it first runs through
+        the box once (a marquee) and then rests on the start of the text."""
+        if getattr(self, 'usb_marquee', None) is not None:
+            self.after_cancel(self.usb_marquee)
+            self.usb_marquee = None
+        width = int(self.usb_box.cget('width')) if getattr(self, 'usb_box', None) is not None else 48
+        if len(label) <= width:
+            self.var_usb_label.set(label)
+            return
+        resting = label                 # the box cuts it where it ends: no padding to guess
+        if not scroll:
+            self.var_usb_label.set(resting)
+            return
+        frames = self.usb_frames(label, width)
+
+        def step(index):
+            self.usb_marquee = None
+            if index >= len(frames):
+                self.var_usb_label.set(resting)
+                return
+            self.var_usb_label.set(frames[index])
+            self.usb_marquee = self.after(1000 if index == len(frames) - 1 else 70, step, index + 1)    # the end rests 1 s
+        self.var_usb_label.set(resting)
+        self.usb_marquee = self.after(700, step, 1)         # a moment to read the start first
+
+    def usb_frames(self, label, width):
+        """What the box shows while the text runs through it: each piece fills the box (measured in the box's own font),
+        so there is no empty space at the right, and the last piece ends with the text."""
+        box = self.usb_box
+        box.update_idletasks()
+        try:
+            font = tkfont.Font(root=self, font=box.cget('font') or 'TkTextFont')
+            room = box.winfo_width() - 24          # the arrow and the borders
+        except tk.TclError:
+            font, room = None, 0
+        if font is None or room <= 40:
+            frames = [label[start:start + width] for start in range(0, len(label) - width + 1, 2)]
+            return frames + [label[-width:]]
+
+        def fits(text):
+            return font.measure(text) <= room
+        frames, start = [], 0
+        while not fits(label[start:]):
+            end = start + 1
+            while end < len(label) and fits(label[start:end + 1]):
+                end += 1
+            frames.append(label[start:end])
+            start += 2
+        end_start = start
+        while end_start > 0 and fits(label[end_start - 1:]):
+            end_start -= 1
+        frames.append(label[end_start:])        # the last piece: flush with the end of the text
+        return frames
+
+    def show_usb_device(self):
+        """The USB device box shows the chosen device by its name (the UDID is what is kept); with nothing attached it
+        says so, however the remembered device is."""
+        serial = self.var_usb_device.get().strip()
+        for device in self.usb_devices:
+            if device.serial == serial:
+                self.show_usb_label(device.label())
+                return
+        if not self.usb_listed:
+            self.var_usb_label.set('')          # the first answer has not come yet
+        else:
+            self.var_usb_label.set('' if self.usb_devices else self.t('usb_none'))
+
+    def usb_chosen(self, event=None):
+        for device in self.usb_devices:
+            if device.label() == self.var_usb_label.get():
+                self.var_usb_device.set(device.serial)
+                self._save_config()
+                self.show_usb_label(device.label(), scroll=True)
+                return
+
+    def refresh_usb(self):
+        """List the devices on USB in the background and fill the box; the one attached device is chosen."""
+        self.usb_listing = getattr(self, 'usb_listing', 0) + 1
+        number = self.usb_listing
+
+        def work():
+            try:
+                devices, error = [usbmux.describe(device) for device in usbmux.list_devices()], None
+            except usbmux.UsbmuxError as failure:
+                devices, error = [], failure
+            self.post(self._usb_listed, devices, error, number)
+        self.run_background(work)
+
+    def _usb_listed(self, devices, error, number=None):
+        if number is not None and number != self.usb_listing:
+            return      # an older answer, slower than a later Refresh: the later one is the truth
+        self.usb_devices, self.usb_listed = devices, True
+        box = getattr(self, 'usb_box', None)
+        if box is not None and box.winfo_exists():
+            box.configure(values=self.usb_labels(), width=self.usb_width())
+            if len(devices) == 1 and self.var_usb_device.get() not in [d.serial for d in devices]:
+                self.var_usb_device.set(devices[0].serial)
+            self.show_usb_device()
+        if error is None:
+            self.usb_error_logged = None
+        elif str(error) != getattr(self, 'usb_error_logged', None):
+            self.usb_error_logged = str(error)      # a rebuilt window asks again: say it once, not each time
+            self.log(error_text(error))
+
     def change_theme(self, name):
         if name == theme_setting(self.var_theme.get()):
             return
@@ -877,7 +1075,10 @@ class DumpGUI(DumpEngine, tk.Tk):
         try:
             while True:
                 func, args = self.events.get_nowait()
-                func(*args)
+                try:
+                    func(*args)
+                except Exception:       # one failing callback must not stop every later update of the window
+                    self.report_callback_exception(*sys.exc_info())
         except queue.Empty:
             pass
         self.after(50, self._drain_events)
@@ -899,7 +1100,8 @@ class DumpGUI(DumpEngine, tk.Tk):
                     frida_method=self.frida_method,
                     name_decrypted=self.var_name_decrypted.get(), name_original=self.var_name_original.get(),
                     separate_dirs=self.var_separate_dirs.get(), font=self.var_font.get(),
-                    font_size=self.var_font_size.get(), theme=self.var_theme.get())
+                    font_size=self.var_font_size.get(), theme=self.var_theme.get(),
+                    connection=self.var_connection.get(), usb_device=self.var_usb_device.get().strip())
         data = {key: value for key, value in data.items() if str(value) != str(DEFAULTS[key])}
         if self.var_remember.get():
             data['password'] = self.var_password.get()
@@ -926,13 +1128,17 @@ class DumpGUI(DumpEngine, tk.Tk):
         except ValueError:
             messagebox.showerror(self.t('m_param_t'), self.t('m_ports'))
             return
+        usb = connection_setting(self.var_connection.get()) == CONNECTION_USB
         host = self.var_host.get().strip()
-        if not host:
+        if not host and not usb:
             messagebox.showerror(self.t('m_param_t'), self.t('m_host'))
             return
         if not self.var_user.get().strip():
             messagebox.showerror(self.t('m_param_t'), self.t('m_user'))
             return
+        serial = self.var_usb_device.get().strip() if usb else ''
+        if usb:
+            host = 'USB ' + serial if serial else 'USB'
         if host != self.list_host:
             # The list, checks and results belong to another device.
             self.apps, self.status = {}, {}
@@ -946,31 +1152,35 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.btn_connect.configure(state='disabled')
         self.set_ssh_state(Text('state_connecting'), 'busy')
         self.run_background(self._connect_worker, self.generation, host, port,
-                            self.var_user.get().strip(), self.var_password.get())
+                            self.var_user.get().strip(), self.var_password.get(),
+                            CONNECTION_USB if usb else CONNECTION_SSH, serial)
 
-    def _connect_worker(self, generation, host, port, user, password):
+    def _connect_worker(self, generation, host, port, user, password, connection, serial):
         self.post(self.log, Text('log_ssh_connecting', user=user, host=host, port=port))
         try:
-            client = open_ssh(host, port, user, password, lambda text: self.post(self.log, text))
+            client, address, tunnel = open_device(connection, host, port, user, password,
+                                                  lambda text: self.post(self.log, text), usb_device=serial)
         except Exception as error:
             self.post(self._connect_failed, generation, error)
             return
-        self.post(self._ssh_connected, generation, client, host)
+        self.post(self._ssh_connected, generation, client, host, address, tunnel)
 
     def _connect_failed(self, generation, error):
         self.ssh_connecting = False
         if generation != self.generation:
             return
-        self.log(Text('log_ssh_failed', error=error))
+        self.log(Text('log_ssh_failed', error=error_text(error)))
         self.set_ssh_state(Text('state_failed'), 'error')
         self.btn_connect.configure(state='normal', text=self.t('connect'))
 
-    def _ssh_connected(self, generation, client, host):
+    def _ssh_connected(self, generation, client, host, address, tunnel):
         self.ssh_connecting = False
         if generation != self.generation:
             client.close()
+            if tunnel is not None:
+                tunnel.close()
             return
-        self.ssh = client
+        self.ssh, self.endpoint, self.usb_tunnel = client, address, tunnel
         self.set_ssh_state(Text('state_connected', host=host), 'ok')
         self.btn_connect.configure(state='normal', text=self.t('disconnect'))
         self.log(Text('log_ssh_ok'))
@@ -1110,9 +1320,13 @@ class DumpGUI(DumpEngine, tk.Tk):
     def disconnect(self, reason):
         self._set_tree_busy(False)
         self.generation += 1
+        self.ssh_connecting = False         # a connect still running is stale now: its answer is dropped
         self._drop_frida()
         if self.ssh is not None:
             self.ssh.close()
+        if self.usb_tunnel is not None:
+            self.usb_tunnel.close()
+        self.usb_tunnel = self.endpoint = None
         self.ssh = self.device_frida_version = self.device_os = None
         self.set_ssh_state(Text(reason), 'idle' if reason == 'state_disconnected' else 'error')
         self.set_frida_state(Text('state_unused'), 'idle')
@@ -1601,7 +1815,7 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.log(Text('log_start_native' if native else 'log_start_direct' if direct else 'log_start', n=len(jobs)))
         helper = native_decrypt.choose(self.var_native_helper.get(), ios_major(self.device_os)) if native else None
         options = dict(direct=direct, native=helper, method=helper or decrypt_method(self.device_os),
-                       host=self.var_host.get().strip(), port=self.var_port.get().strip(),
+                       host=self.endpoint[0], port=str(self.endpoint[1]),
                        user=self.var_user.get().strip(), password=self.var_password.get(),
                        frida='127.0.0.1:{}'.format(self.tunnel.local_port) if self.tunnel else None,
                        frida_version=self.frida_version,
@@ -1985,10 +2199,6 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('IPAExtractor')
         except (AttributeError, OSError):
             pass
-    if len(sys.argv) > 1:
-        # Any argument means the command line (ipa_cli.py), so ./ipa_extractor.sh apps works too.
-        import ipa_cli
-        sys.exit(ipa_cli.main())
     if engine.paramiko is None and not install_base_packages():
         return
     DumpGUI().mainloop()

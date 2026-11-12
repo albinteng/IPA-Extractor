@@ -37,6 +37,7 @@ import ipa_verify
 import i18n
 import native_decrypt
 import remote
+import usbmux
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 WORKER = os.path.join(script_dir, 'dump_worker.py')
@@ -98,6 +99,16 @@ def resolve_theme(value):
     return system_theme() if value == THEME_SYSTEM else value
 
 
+# How the tool reaches the device: SSH over the network, or SSH carried through the USB cable (usbmux.py).
+CONNECTION_SSH, CONNECTION_USB = 'ssh', 'usb'
+CONNECTIONS = (CONNECTION_SSH, CONNECTION_USB)
+
+
+def connection_setting(value):
+    """A connection name from a settings file or a variable; anything unknown is the default, SSH."""
+    return value if value in CONNECTIONS else CONNECTION_SSH
+
+
 DEFAULT_FONT_SIZE = 13 if IS_MACOS else 10
 
 # Settings files keep only values that differ from these, so new defaults reach existing users.
@@ -110,11 +121,11 @@ DUMP_METHODS = (METHOD_FRIDA_DIRECT, METHOD_FRIDA_IOS_DUMP, METHOD_NATIVE)
 DEFAULTS = dict(
     host='', port=22, user='', frida_port=27042,
     user_only=True, non_apple=False, encrypted_only=False,
-    outdir=os.path.join(script_dir, 'output_decrypted'), extract_dir=os.path.join(script_dir, 'output_encrypted'),
-    separate_dirs=True, name_decrypted=app_info.DEFAULT_DECRYPTED_NAME, name_original=app_info.DEFAULT_ORIGINAL_NAME,
+    outdir=os.path.join(script_dir, 'output'), extract_dir=os.path.join(script_dir, 'output_encrypted'),
+    separate_dirs=False, name_decrypted=app_info.DEFAULT_DECRYPTED_NAME, name_original=app_info.DEFAULT_ORIGINAL_NAME,
     dump_dir=DEFAULT_DUMP_DIR, close_after=True, restart_frida=True, repair=True, dump_method=METHOD_NATIVE,
     frida_method=METHOD_FRIDA_DIRECT, native_helper=native_decrypt.AUTO,
-    lang=i18n.AUTO, font='', font_size=DEFAULT_FONT_SIZE, theme=THEME_SYSTEM,
+    lang=i18n.AUTO, font='', font_size=DEFAULT_FONT_SIZE, theme=THEME_SYSTEM, connection=CONNECTION_SSH, usb_device='',
 )
 
 
@@ -506,6 +517,36 @@ def open_ssh(host, port, user, password, log):
                 time.sleep(2)
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+
+def error_text(error):
+    """A usbmux error as a translatable Text (its parts too); any other error as it is."""
+    if isinstance(error, usbmux.UsbmuxError):
+        return Text(error.key, **{name: error_text(value) for name, value in error.params.items()})
+    return error
+
+
+def open_device(connection, host, port, user, password, log, usb_device=''):
+    """(client, address, tunnel): an SSH client for the device, over the network or through USB.
+
+    address is the (host, port) SSH really connects to (the local end of the tunnel for USB), for programs that
+    open their own SSH connection; close the tunnel (None for the network) after the client.
+    """
+    tunnel = None
+    if connection_setting(connection) == CONNECTION_USB:
+        tunnel = usbmux.UsbTunnel(usb_device, port)
+        address = ('127.0.0.1', tunnel.local_port)
+    else:
+        address = (host, port)
+    try:
+        return open_ssh(address[0], address[1], user, password, log), address, tunnel
+    except BaseException as error:
+        reason = getattr(tunnel, 'last_error', None)
+        if tunnel is not None:
+            tunnel.close()
+        if isinstance(reason, usbmux.UsbmuxError) and not isinstance(error, usbmux.UsbmuxError):
+            raise reason from error     # not "no SSH banner", but why the device could not be reached
+        raise
 
 
 class DumpEngine:
