@@ -94,6 +94,17 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(workers.run('nothing', []), 2)
 
 
+class PlaceholderVersionTests(unittest.TestCase):
+    """The install window works out the command for '?' while no version is chosen yet (no device, no list loaded)."""
+
+    def test_a_version_not_chosen_yet_has_an_install_command(self):
+        self.assertFalse(frida_versions.is_legacy('?'))
+        self.assertTrue(frida_versions.install_command('?'))
+        self.assertTrue(engine.DumpEngine._install_commands('?', None))
+        self.assertTrue(frida_versions.is_legacy('12.10.2'))
+        self.assertFalse(frida_versions.is_legacy('16.6.6'))
+
+
 class WheelTests(unittest.TestCase):
     WINDOWS = 'frida-16.5.9-cp37-abi3-win_amd64.whl'
     MAC_ARM = 'frida-16.5.9-cp37-abi3-macosx_11_0_arm64.whl'
