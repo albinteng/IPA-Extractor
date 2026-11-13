@@ -370,6 +370,20 @@ class WindowTests(unittest.TestCase):
             gui.start_dump()
         return error, gui._prepare_batch
 
+    def test_installing_frida_without_a_connection_still_lists_the_versions(self):
+        """Not connected, nothing chosen yet: the install command is worked out for a placeholder version, and that
+        once raised and stopped the window before it asked PyPI, leaving the version box empty and "loading..." for ever."""
+        with mock.patch.object(core, 'frida_releases', return_value=['17.0.0', '16.6.6']):
+            self.gui.open_install_dialog(None)
+            boxes = []
+            deadline = time.time() + 5
+            while time.time() < deadline and not boxes:
+                self.gui.update()
+                time.sleep(0.05)
+                boxes = [w for w in walk(self.gui) if isinstance(w, ttk.Combobox) and '17.0.0' in w.cget('values')]
+        self.assertTrue(boxes, 'the version box was never filled')
+        self.assertIsNotNone(label_with(self.gui, self.gui.t('inst_latest', version='17.0.0')))
+
     def test_file_mapping_on_ios_16_is_explained_and_nothing_starts(self):
         error, prepare = self.dump_with('mremap', 'iOS 16.1.2')
         error.assert_called_once()

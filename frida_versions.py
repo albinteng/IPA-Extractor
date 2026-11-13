@@ -107,7 +107,8 @@ def staging(version, root=None):
 
 def is_legacy(version):
     """Whether this frida has no wheel for current Pythons and needs its own Python 3.8."""
-    return int(major(version) or 0) < LEGACY_BELOW
+    first = major(version)
+    return first.isdigit() and int(first) < LEGACY_BELOW      # '?' stands for a version that is not chosen yet
 
 
 def legacy_supported():
