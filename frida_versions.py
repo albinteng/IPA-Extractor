@@ -6,6 +6,7 @@ A process can load only one frida, so the GUI never imports it: everything that 
 Frida runs in a child process whose PYTHONPATH points at the chosen version's folder.
 """
 
+import hashlib
 import io
 import json
 import os
@@ -17,6 +18,8 @@ import tempfile
 import urllib.request
 import zipfile
 
+import app_paths
+
 script_dir = os.path.dirname(os.path.realpath(__file__))
 VERSION_RE = re.compile(r'\d+\.\d+\.\d+')
 LEGACY_BELOW = 14  # frida 14 is the first with abi3 wheels; older ones ship eggs for Python 2.7 and 3.8 only
@@ -26,19 +29,10 @@ PYPI_URL = 'https://pypi.org/pypi/frida/{}/json'
 COMPLETE = '.complete'  # written after pip succeeds, so a half-finished install is never used
 
 
-def _writable(folder):
-    try:
-        os.makedirs(folder, exist_ok=True)
-        with tempfile.TemporaryFile(dir=folder):
-            return True
-    except OSError:
-        return False
-
-
 def default_root():
     """Beside the tool like settings.json; the home folder when the tool's folder is read-only."""
-    portable = os.path.join(script_dir, 'frida_versions')
-    if _writable(portable):
+    portable = os.path.join(app_paths.DATA_DIR, 'frida_versions')
+    if app_paths.writable(app_paths.DATA_DIR):       # the folder itself is made by the first install, not now
         return portable
     return os.path.join(os.path.expanduser('~'), '.ipa_extractor', 'frida_versions')
 
@@ -101,6 +95,18 @@ def python(version, root=None):
     return sys.executable
 
 
+def worker_command(version, script):
+    """The start of the command line that runs one of the tool's scripts with this frida version.
+
+    From source, the version's interpreter runs the script. The released program has no interpreter and no script
+    files to run: it starts itself in worker mode (see workers.py), unless the version brought its own Python.
+    """
+    interpreter = python(version)
+    if app_paths.FROZEN and interpreter == sys.executable:
+        return [app_paths.program_path(), '--worker', os.path.splitext(os.path.basename(script))[0]]
+    return [interpreter, '-u', script]
+
+
 def staging(version, root=None):
     return folder(version, root) + '.partial'
 
@@ -156,11 +162,53 @@ def install_legacy(version, log, root=None):
         handle.write('\n'.join(['python38.zip', '.', '..', 'import site', '']))
 
 
+def wheel_matches(filename, system=None, machine=None):
+    """Whether a PyPI file is a frida wheel for this computer that any current Python can use (abi3)."""
+    system = system or sys.platform
+    machine = (machine or platform.machine()).lower()
+    parts = filename[:-4].split('-') if filename.endswith('.whl') else []
+    if len(parts) < 5 or parts[0] != 'frida' or 'abi3' not in parts[-2].split('.'):
+        return False
+    arm = machine in ('arm64', 'aarch64')
+    for tag in parts[-1].split('.'):
+        if system == 'win32':
+            if tag == ('win_arm64' if arm else 'win_amd64' if machine in ('amd64', 'x86_64') else 'win32'):
+                return True
+        elif system == 'darwin':
+            if tag.startswith('macosx_') and (tag.endswith('_universal2') or tag.endswith('_arm64' if arm else '_x86_64')):
+                return True
+        elif tag.startswith('manylinux') and tag.endswith('_aarch64' if arm else '_x86_64'):
+            return True
+    return False
+
+
+def install_wheel(version, log, root=None):
+    """Install a current frida into its staging folder without pip: the abi3 wheel is a zip of the package.
+
+    log(text) reports progress. Raises on failure; finish_install() then moves it into place.
+    """
+    with urllib.request.urlopen(PYPI_URL.format(version), timeout=30) as response:
+        files = json.load(response)['urls']
+    wheel = next((f for f in files if wheel_matches(f['filename']) and not f.get('yanked')), None)
+    if wheel is None:
+        raise RuntimeError('frida {} has no wheel for this computer ({} {})'.format(
+            version, sys.platform, platform.machine()))
+    log('Downloading ' + wheel['url'])
+    with urllib.request.urlopen(wheel['url'], timeout=120) as response:
+        data = response.read()
+    if hashlib.sha256(data).hexdigest() != wheel.get('digests', {}).get('sha256'):
+        raise RuntimeError('the downloaded {} does not match its checksum'.format(wheel['filename']))
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        archive.extractall(staging(version, root))
+
+
 def install_command(version, root=None):
     """pip command that installs frida==version into its staging folder (see finish_install)."""
     if is_legacy(version):
         return ['download', egg_name(version), 'and', 'Python', LEGACY_PYTHON, '(embeddable)']
     # --target cannot be combined with --user; the folder needs no administrator rights anyway.
+    if app_paths.FROZEN:
+        return ['download', 'the', 'frida', version, 'wheel', 'for', 'this', 'computer', 'from', 'PyPI']
     return [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location',
             '--target', staging(version, root), 'frida=={}'.format(version)]
 

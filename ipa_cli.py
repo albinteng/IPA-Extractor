@@ -35,6 +35,10 @@ import usbmux
 import engine as core
 from engine import Text, Indented
 
+# How the command is typed: the released program is the file that was started, from source it is the script.
+PROG = os.path.basename(sys.argv[0]) if core.app_paths.FROZEN and sys.argv and sys.argv[0] else 'ipa_cli.py'
+RUN = PROG if core.app_paths.FROZEN else 'python ipa_cli.py'
+
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PARTIAL, EXIT_CANCELLED = 0, 1, 2, 3, 130
 MODES = {'native': core.METHOD_NATIVE, 'frida-direct': core.METHOD_FRIDA_DIRECT,
          'frida-ios-dump': core.METHOD_FRIDA_IOS_DUMP}
@@ -282,7 +286,7 @@ class Cli(core.DumpEngine):
         chosen = {}
         for bundle in args.bundles:
             if bundle not in self.apps:
-                raise CliError('no app with the bundle ID {} on the device (see: ipa_cli.py apps)'.format(bundle))
+                raise CliError('no app with the bundle ID {} on the device (see: {} apps)'.format(bundle, PROG))
             chosen[bundle] = self.apps[bundle]
         flagged = args.all or args.unextracted or args.partial or args.search
         if flagged:
@@ -403,7 +407,7 @@ class Cli(core.DumpEngine):
         if version is None:
             if not args.install_frida:
                 raise CliError('no installed frida fits frida-server {} on the device. Install it with:\n  {}\n'
-                               'or add --install-frida'.format(device_version, 'python ipa_cli.py install-frida --version '
+                               'or add --install-frida'.format(device_version, RUN + ' install-frida --version '
                                                                + device_version))
             dump_dir = None if direct else (args.dump_dir or c['dump_dir'])
             if not self.install_frida(device_version, dump_dir):
@@ -439,8 +443,8 @@ class Cli(core.DumpEngine):
         native = method == core.METHOD_NATIVE
         dump_dir = (args.dump_dir or c['dump_dir']).strip()
         if not direct and core.dump_dir_status(dump_dir) != 'ok':
-            raise CliError('frida-ios-dump is not set up in {!r}: run "python ipa_cli.py install-frida-ios-dump" '
-                           'or use --dump-dir, or choose another --mode'.format(dump_dir))
+            raise CliError('frida-ios-dump is not set up in {!r}: run "{} install-frida-ios-dump" '
+                           'or use --dump-dir, or choose another --mode'.format(dump_dir, RUN))
         try:
             names = {app['bundle']: {kind: self.ipa_name(app, 'dump', kind) for kind in core.DUMP_KINDS}
                      for app in apps}
@@ -692,8 +696,7 @@ def update_settings(changes, reset=()):
             data.pop(key, None)
         else:
             data[key] = value
-    with open(core.CONFIG_PATH, 'w', encoding='utf-8') as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2)
+    core.save_config(data)
 
 
 def cmd_config(cli):
@@ -730,7 +733,7 @@ def cmd_config(cli):
 
 # ------------------------------------------------------------------------ parser
 def build_parser():
-    parser = argparse.ArgumentParser(prog='ipa_cli.py', description='Extract original or decrypted IPAs from a '
+    parser = argparse.ArgumentParser(prog=PROG, description='Extract original or decrypted IPAs from a '
                                      'jailbroken iOS device over SSH. Shares settings.json with the window.')
 
     def common(p, after_command):

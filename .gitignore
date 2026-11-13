@@ -8,3 +8,5 @@ frida_versions/
 *.ipa
 *.part
 .DS_Store
+build/
+IPA-Extractor/

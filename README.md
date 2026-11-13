@@ -34,7 +34,7 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi o
 
 **Computer**
 
-- Python 3.9 or later; the window needs its tkinter module, the command line does not. The Python packages the tool needs ([Paramiko](https://www.paramiko.org/), [cryptography](https://cryptography.io/), and [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) on Linux) are installed on first start, after asking.
+- Only to run from source (the downloadable program needs none): Python 3.9 or later; the window needs its tkinter module, the command line does not. The Python packages the tool needs ([Paramiko](https://www.paramiko.org/), [cryptography](https://cryptography.io/), and [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) on Linux) are installed on first start, after asking.
 - For decrypted IPAs made with frida-ios-dump: Node.js (`npm install` fetches `frida-objc-bridge` for frida-ios-dump) and a copy of frida-ios-dump; the tool can download it for you. *Direct decryption mode* and *Native helper* need neither.
 
 ## Setting up the device
@@ -53,12 +53,74 @@ The `frida` used on the computer must match the major version of frida-server on
 
 ## Getting started
 
-### Windows
+You can download a program that runs without Python (from version 4.1 on), or run the Python source.
+
+### Download and run (no Python needed)
+
+Every [release](https://github.com/albinteng/IPA-Extractor/releases) from version 4.1 on has four files under *Assets*; releases before 4.1 have only the source code. The programs are not signed.
+
+| Computer | File | What it contains |
+| --- | --- | --- |
+| Windows (x64) | `IPA-Extractor-windows-x64.zip` | `IPA-Extractor.exe`, a single file |
+| Linux (x64) | `IPA-Extractor-linux-x64.tar.gz` | `IPA-Extractor`, a single file |
+| macOS, Intel | `IPA-Extractor-macos-intel.zip` | `IPA Extractor.app` |
+| macOS, Apple Silicon | `IPA-Extractor-macos-apple-silicon.zip` | `IPA Extractor.app` |
+
+Started without arguments, the program opens the window. Started with arguments, it is the command line (see [CLI](#cli); every command works).
+
+#### Windows
+
+1. Unzip `IPA-Extractor.exe` into a folder of its own: the settings, the output and the downloaded Frida versions are kept beside it.
+2. Double-click it for the window. For the command line open cmd or PowerShell in that folder (a double click shows no console, so the command line prints nothing there):
+
+```
+IPA-Extractor.exe devices
+IPA-Extractor.exe decrypt --mode frida-direct --usb com.example.app
+```
+
+#### Linux
+
+1. Unpack the archive into a folder of its own: the settings, the output and the downloaded Frida versions are kept beside the file.
+2. Start it from a terminal, or double-click it in a file manager that runs executables:
+
+```sh
+tar -xzf IPA-Extractor-linux-x64.tar.gz
+chmod +x IPA-Extractor            # only if the executable flag was lost
+./IPA-Extractor                   # the window
+./IPA-Extractor apps --ssh -H 192.168.1.20 -u root
+```
+
+The window needs a graphical desktop; for Chinese, Japanese or Korean text install a CJK font such as `fonts-noto-cjk`. To connect by USB, install the `usbmuxd` package.
+
+#### macOS
+
+1. Unzip, move `IPA Extractor.app` to *Applications* and open it. Because the app is not signed, macOS may refuse to open it the first time.
+2. The command line is the program inside the app:
+
+```sh
+"/Applications/IPA Extractor.app/Contents/MacOS/IPA-Extractor" devices
+alias ipa-extractor='"/Applications/IPA Extractor.app/Contents/MacOS/IPA-Extractor"'
+ipa-extractor decrypt --usb com.example.app
+```
+
+The app itself is never modified: the settings are in `~/Library/Application Support/IPA Extractor` and the output in `~/Documents/IPA Extractor`.
+
+#### Differences from running the source
+
+- No Python or pip is involved. The *Frida* modes download the `frida` version a device needs when you ask for it (Frida 12 and 13 need Windows x64).
+- frida-ios-dump needs Node.js, as from source.
+- On Windows and Linux nothing is written until you change a setting or install something. A read-only folder uses `~/.ipa_extractor` instead.
+
+### Run from source
+
+You need Python 3.9 or later (see [Requirements](#requirements)).
+
+#### Windows
 
 1. Install Python from [python.org](https://www.python.org/downloads/) and tick *Add python.exe to PATH*.
 2. Double-click `ipa_extractor.bat`. If `paramiko` is missing, the tool offers to install it (with `pip install --user`, so no administrator rights are needed).
 
-### Linux
+#### Linux
 
 ```sh
 ./ipa_extractor.sh
@@ -68,7 +130,7 @@ If Python's `venv` or `tkinter` (the window needs it) is missing, the script say
 
 On first start the window offers to install its Python packages into `./.venv`, including [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) for a modern look. For Chinese, Japanese or Korean UI text, install a CJK font such as `fonts-noto-cjk`.
 
-### macOS
+#### macOS
 
 ```sh
 brew install python python-tk   # or use the python.org installer, which includes Tk
@@ -87,7 +149,7 @@ brew install python python-tk   # or use the python.org installer, which include
 
 Decrypted IPAs are made without Frida by default (*Native helper*): nothing needs installing, on the computer or on the device. In **Settings → Decryption** leave the helper on *Automatic* (file mapping up to iOS 15, process memory from iOS 16) or force one of them. File mapping is refused by iOS 16 and later: if you chose it for such a device, the *Decrypted IPA* button explains that and does nothing.
 
-To use Frida instead, open **Settings → Decryption**, choose *Frida* and click *Install Frida dependencies* to add a `frida` version (the device's frida-server version is recommended); it runs `pip install --target` into that version's folder. No restart is needed. To use frida-ios-dump, choose *frida-ios-dump decryption mode* under *Frida*: *Install frida-ios-dump* downloads the latest version from GitHub to a folder you choose, *Install Frida dependencies* also runs `npm install`, and the device must stay unlocked with the screen on.
+To use Frida instead, open **Settings → Decryption**, choose *Frida* and click *Install Frida dependencies* to add a `frida` version (the device's frida-server version is recommended); from source it runs `pip install --target` into that version's folder (the downloadable program unpacks the wheel instead). No restart is needed. To use frida-ios-dump, choose *frida-ios-dump decryption mode* under *Frida*: *Install frida-ios-dump* downloads the latest version from GitHub to a folder you choose, *Install Frida dependencies* also runs `npm install`, and the device must stay unlocked with the screen on.
 
 ### Settings
 
@@ -109,6 +171,16 @@ Settings are stored in `settings.json` next to the tool, so they move with its f
 ## CLI
 
 Everything the window does is also available without it, for scripts and servers: `ipa_cli.py` (or any arguments to `ipa_extractor.py` / `ipa_extractor.sh`; it needs the same Python packages but neither tkinter nor a display). It reads the device and the options from `settings.json`, the file the window saves, and options given on the command line override it.
+
+How to start it:
+
+| | Downloaded program (no Python) | From source |
+| --- | --- | --- |
+| Windows | `IPA-Extractor.exe apps ...` (cmd or PowerShell, in its folder) | `python ipa_cli.py apps ...` |
+| Linux | `./IPA-Extractor apps ...` | `python3 ipa_cli.py apps ...` or `./ipa_extractor.sh apps ...` |
+| macOS | `"/Applications/IPA Extractor.app/Contents/MacOS/IPA-Extractor" apps ...` | `python3 ipa_cli.py apps ...` or `./ipa_extractor.sh apps ...` |
+
+The examples below are written for the source (`python ipa_cli.py`); with the downloaded program, write its name instead, e.g. `IPA-Extractor.exe apps -H 192.168.1.20 -u root`.
 
 ```
 python ipa_cli.py apps -H 192.168.1.20 -u root          list the apps (add --json for scripts)
@@ -155,6 +227,8 @@ Each language is a JSON file in `locales/` named by its language tag, e.g. `ja.j
 | `engine.py` | What needs no window: settings, SSH, and the engine (`DumpEngine`) that copies and decrypts apps; shared by the GUI and the CLI, never imports tkinter |
 | `ipa_cli.py` | Command line: the same features without the window |
 | `ipa_extractor.bat`, `ipa_extractor.sh` | Launchers for Windows and Linux/macOS |
+| `app_paths.py`, `workers.py` | For the program built without Python: where it keeps its files, and the mode in which it runs its own helper processes |
+| `build.py` | Builds that program with [Nuitka](https://nuitka.net/) |
 | `device_apps.py` | Lists installed apps over SSH/SFTP with the names the Home screen shows |
 | `ipa_extract.py` | Streams an installed bundle over SSH into an IPA without decrypting it |
 | `app_info.py` | Reads Info.plist, encryption state and code signature; builds IPA file names |
@@ -165,6 +239,7 @@ Each language is a JSON file in `locales/` named by its language tag, e.g. `ja.j
 | `native_decrypt.py` | The same without Frida: uploads and runs the helpers in `helpers/` over SSH |
 | `helpers/` | The two device-side helper programs: `src/` (C source), `bin/` (the built, signed binaries), `README.md` |
 | `.github/workflows/build-helpers.yml` | Builds the helpers from `helpers/src` on a macOS runner |
+| `.github/workflows/tests.yml`, `release.yml` | Run the tests on the three systems; build the downloads when a version tag is pushed |
 | `frida_versions.py` | Keeps several `frida` versions side by side and picks one per device |
 | `frida_probe.py` | Checks the connection to frida-server with a given `frida` version |
 | `remote.py` | Runs shell commands on the device |

@@ -200,8 +200,9 @@ class SettingsTests(unittest.TestCase):
         with open(self.path, encoding='utf-8') as handle:
             self.assertEqual(json.load(handle), dict(theme='dark', host='10.0.0.5'))
         ipa_cli.update_settings({'theme': 'system'}, reset=['host'])
-        with open(self.path, encoding='utf-8') as handle:
-            self.assertEqual(json.load(handle), {})
+        self.assertFalse(os.path.exists(self.path))      # nothing left that differs: no file, not an empty {}
+        ipa_cli.update_settings({'theme': 'system'})
+        self.assertFalse(os.path.exists(self.path))
 
     def test_other_saved_keys_such_as_the_password_are_kept(self):
         with open(self.path, 'w', encoding='utf-8') as handle:
@@ -209,6 +210,14 @@ class SettingsTests(unittest.TestCase):
         ipa_cli.update_settings({'host': 'h'})
         with open(self.path, encoding='utf-8') as handle:
             self.assertEqual(json.load(handle), dict(password='secret', theme='dark', host='h'))
+
+    def test_a_settings_file_with_anything_left_in_it_is_never_removed(self):
+        for content in (dict(password='secret'), dict(theme='dark'), dict(unknown_key=1)):
+            with open(self.path, 'w', encoding='utf-8') as handle:
+                json.dump(content, handle)
+            ipa_cli.update_settings({'port': 22})          # a default value: nothing to add
+            with open(self.path, encoding='utf-8') as handle:
+                self.assertEqual(json.load(handle), content)
 
     def test_config_command(self):
         for argv in (('config', 'set', 'theme', 'black'), ('config', 'set', 'theme', 'pink')):

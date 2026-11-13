@@ -4,6 +4,11 @@
 
 import sys
 
+if __name__ == '__main__' and len(sys.argv) > 2 and sys.argv[1] == '--worker':
+    # The released program runs its own helper processes (Frida, repair) by starting itself again (workers.py).
+    import workers
+    sys.exit(workers.run(sys.argv[2], sys.argv[3:]))
+
 if __name__ == '__main__' and len(sys.argv) > 1:
     # Any argument means the command line (ipa_cli.py), so ./ipa_extractor.sh apps works too. Decided before tkinter
     # is imported: a server without it must still get here.
@@ -37,7 +42,7 @@ from engine import (
     NO_WINDOW, THEMES, THEME_BLACK, THEME_DARK, THEME_LIGHT, DumpEngine, Indented, SSHTunnel, Text, __version__,
     connection_setting, decrypt_method, download_frida_ios_dump, error_text, dump_dir_status, dump_method_setting, frida_method_setting,
     frida_releases, frida_server_status, ios_major, is_apple_app, is_user_app, load_config, major, natural_key,
-    open_device, pip_install, probe_frida, resolve_theme, script_dir, theme_setting)
+    open_device, pip_install, probe_frida, resolve_theme, theme_setting)
 
 CHECKED, UNCHECKED = '☑', '☐'
 # UI colours per theme (the theme setting). Light keeps the platform's native look; dark and black
@@ -1106,8 +1111,7 @@ class DumpGUI(DumpEngine, tk.Tk):
         if self.var_remember.get():
             data['password'] = self.var_password.get()
         try:
-            with open(engine.CONFIG_PATH, 'w', encoding='utf-8') as handle:
-                json.dump(data, handle, ensure_ascii=False, indent=2)
+            engine.save_config(data)
         except OSError as error:
             self.log(Text('log_config_fail', error=error))
 
@@ -1681,7 +1685,7 @@ class DumpGUI(DumpEngine, tk.Tk):
         self._update_row(bundle)
 
     # ---------------------------------------------------------------- dump
-    def choose_dir(self, var, fallback=script_dir, parent=None):
+    def choose_dir(self, var, fallback=engine.app_paths.OUTPUT_BASE, parent=None):
         path = filedialog.askdirectory(initialdir=var.get() or fallback, parent=parent or self)
         if path:
             var.set(os.path.normpath(path))
@@ -1693,7 +1697,7 @@ class DumpGUI(DumpEngine, tk.Tk):
             if IS_WINDOWS:
                 os.startfile(path)
             else:
-                subprocess.Popen(['open' if IS_MACOS else 'xdg-open', path])
+                subprocess.Popen(['open' if IS_MACOS else 'xdg-open', path], stdin=subprocess.DEVNULL)
         except OSError as error:
             messagebox.showerror(self.t('m_outdir_t'), str(error))
 
@@ -2072,7 +2076,8 @@ class DumpGUI(DumpEngine, tk.Tk):
             commands = self._install_commands(version or '?', dump_dir)
             commands_text.configure(state='normal')
             commands_text.delete('1.0', 'end')
-            commands_text.insert('end', '\n'.join('{}   ({})'.format(' '.join(c), cwd) for c, cwd in commands))
+            commands_text.insert('end', '\n'.join(' '.join(c) + ('   ({})'.format(cwd) if cwd else '')
+                                                           for c, cwd in commands))
             commands_text.configure(state='disabled')
             run_button.configure(state='normal' if version and not self.installing else 'disabled')
 
@@ -2175,8 +2180,8 @@ def install_base_packages():
         root.destroy()
         return False
     root.configure(cursor='watch')
-    process = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace',
-                             creationflags=NO_WINDOW)
+    process = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding='utf-8',
+                             errors='replace', creationflags=NO_WINDOW)
     try:
         if process.returncode:
             raise RuntimeError((process.stdout + process.stderr).strip()[-1500:])
@@ -2199,7 +2204,7 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('IPAExtractor')
         except (AttributeError, OSError):
             pass
-    if engine.paramiko is None and not install_base_packages():
+    if engine.paramiko is None and not engine.app_paths.FROZEN and not install_base_packages():
         return
     DumpGUI().mainloop()
 

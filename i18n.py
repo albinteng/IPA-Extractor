@@ -41,8 +41,8 @@ def system_language_tags():
             tags.append(buffer.value)
     elif sys.platform == 'darwin':
         try:
-            output = subprocess.run(['defaults', 'read', '-g', 'AppleLanguages'], capture_output=True,
-                                    text=True, timeout=5).stdout
+            output = subprocess.run(['defaults', 'read', '-g', 'AppleLanguages'], stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=5).stdout
             tags += [part.strip(' "\n,()') for part in output.split('\n')]
         except (OSError, subprocess.SubprocessError):
             pass

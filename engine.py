@@ -3,7 +3,7 @@
 """The part of IPA Extractor that needs no window: settings, the SSH connection, and DumpEngine, which copies and
 decrypts apps. The window (ipa_extractor.py) and the command line (ipa_cli.py) both build on it; it never imports tkinter."""
 
-__version__ = '4.0'
+__version__ = '4.1'
 APP_NAME = 'IPA Extractor'
 
 import contextlib
@@ -29,6 +29,7 @@ except ImportError:  # the window offers to install it; the command line says ho
     paramiko = None
 
 import app_info
+import app_paths
 import device_apps
 import frida_versions
 import ipa_extract
@@ -48,7 +49,8 @@ MEMORY_FROM_IOS = 16  # mremap_encrypted is refused from iOS 16 on; the system l
 PROBE = os.path.join(script_dir, 'frida_probe.py')
 PROBE_TIMEOUT = 30
 ASSETS = os.path.join(script_dir, 'assets')
-DEFAULT_DUMP_DIR = os.path.join(os.path.dirname(script_dir), 'frida-ios-dump')
+DEFAULT_DUMP_DIR = (os.path.join(app_paths.OUTPUT_BASE, 'frida-ios-dump') if app_paths.FROZEN
+                    else os.path.join(os.path.dirname(script_dir), 'frida-ios-dump'))
 IS_WINDOWS = sys.platform == 'win32'
 IS_MACOS = sys.platform == 'darwin'
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
@@ -70,7 +72,8 @@ def system_theme():
         try:
             if shutil.which(command[0]) is None:
                 return ''
-            done = subprocess.run(command, capture_output=True, text=True, timeout=3, creationflags=NO_WINDOW)
+            done = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3,
+                                  creationflags=NO_WINDOW)
             return done.stdout.lower() if done.returncode == 0 else ''
         except (OSError, subprocess.SubprocessError):
             return ''
@@ -121,7 +124,7 @@ DUMP_METHODS = (METHOD_FRIDA_DIRECT, METHOD_FRIDA_IOS_DUMP, METHOD_NATIVE)
 DEFAULTS = dict(
     host='', port=22, user='', frida_port=27042,
     user_only=True, non_apple=False, encrypted_only=False,
-    outdir=os.path.join(script_dir, 'output'), extract_dir=os.path.join(script_dir, 'output_encrypted'),
+    outdir=os.path.join(app_paths.OUTPUT_BASE, 'output'), extract_dir=os.path.join(app_paths.OUTPUT_BASE, 'output_encrypted'),
     separate_dirs=False, name_decrypted=app_info.DEFAULT_DECRYPTED_NAME, name_original=app_info.DEFAULT_ORIGINAL_NAME,
     dump_dir=DEFAULT_DUMP_DIR, close_after=True, restart_frida=True, repair=True, dump_method=METHOD_NATIVE,
     frida_method=METHOD_FRIDA_DIRECT, native_helper=native_decrypt.AUTO,
@@ -129,17 +132,10 @@ DEFAULTS = dict(
 )
 
 
-def _writable(folder):
-    try:
-        with tempfile.TemporaryFile(dir=folder):
-            return True
-    except OSError:
-        return False
-
-
 # Portable: settings stay beside the tool and move with its folder. The home folder is the
 # fallback when the tool's folder is read-only (e.g. under Program Files).
-CONFIG_PATH = (os.path.join(script_dir, 'settings.json') if _writable(script_dir)
+CONFIG_PATH = (os.path.join(app_paths.DATA_DIR, 'settings.json') if app_paths.FROZEN
+               else os.path.join(script_dir, 'settings.json') if app_paths.writable(script_dir)
                else os.path.join(os.path.expanduser('~'), '.ipa_extractor.json'))
 PYPI_FRIDA_URL = 'https://pypi.org/pypi/frida/json'
 PROGRESS_INTERVAL = 0.2      # seconds between progress updates while streaming an IPA
@@ -179,6 +175,19 @@ def load_config():
             return json.load(handle)
     except (OSError, ValueError):
         return {}
+
+
+def save_config(data):
+    """Write the settings file. Nothing set (all defaults) means no file: it is removed, never written as {}."""
+    if not data:
+        try:
+            os.remove(CONFIG_PATH)
+        except FileNotFoundError:
+            pass
+        return
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)     # on macOS the folder is made by the first save
+    with open(CONFIG_PATH, 'w', encoding='utf-8') as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
 
 
 class SSHTunnel:
@@ -251,7 +260,7 @@ def probe_frida(version, address, wait=0, deep=False):
     deep also makes it run a script inside frida-server, which is what decrypting needs.
     Returns (ok, detail): detail is the device OS on success, the error otherwise.
     """
-    command = [frida_versions.python(version), '-u', PROBE, address] + (['--wait', str(wait)] if wait else []) \
+    command = frida_versions.worker_command(version, PROBE) + [address] + (['--wait', str(wait)] if wait else []) \
         + (['--deep'] if deep else [])
     try:
         process = subprocess.run(command, env=frida_versions.env(version), stdin=subprocess.DEVNULL,
@@ -436,8 +445,9 @@ def classify_error(message):
 def download_frida_ios_dump(target, log):
     """Clone frida-ios-dump with git, or fall back to GitHub's zip archive."""
     if shutil.which('git'):
+        # stdin must be given: a program started without a console (a double click) has no valid standard input.
         process = subprocess.run(['git', 'clone', '--depth', '1', FRIDA_IOS_DUMP_URL + '.git', target],
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                  encoding='utf-8', errors='replace', creationflags=NO_WINDOW)
         for line in process.stdout.splitlines():
             if line.strip():
@@ -886,8 +896,8 @@ class DumpEngine:
         jobs_path = os.path.join(work, 'jobs.json')
         with open(jobs_path, 'w', encoding='utf-8') as handle:
             json.dump([job.to_json() for job in jobs], handle)
-        command = [frida_versions.python(options['frida_version']), '-u', REPAIR_WORKER, options['frida'], jobs_path, work,
-                   '--method', options['method'], '--bundle', bundle]
+        command = frida_versions.worker_command(options['frida_version'], REPAIR_WORKER) + [
+            options['frida'], jobs_path, work, '--method', options['method'], '--bundle', bundle]
         if pid:
             command += ['--pid', str(pid)]
         if options['direct']:
@@ -1033,9 +1043,9 @@ class DumpEngine:
 
         report(0, Text('stage_connecting'))
         self._close_running_app(bundle)
-        command = [frida_versions.python(options['frida_version']), '-u', WORKER, bundle, '-R', options['frida'],
-                   '--ssh-transport', 'tcp', '-H', options['host'], '-p', options['port'],
-                   '-u', options['user'], '-o', name, '-v']
+        command = frida_versions.worker_command(options['frida_version'], WORKER) + [
+            bundle, '-R', options['frida'], '--ssh-transport', 'tcp', '-H', options['host'], '-p', options['port'],
+            '-u', options['user'], '-o', name, '-v']
         env = dict(frida_versions.env(options['frida_version']), FRIDA_DUMP_SSH_PASSWORD=options['password'],
                    PYTHONIOENCODING='utf-8', FRIDA_IOS_DUMP_DIR=options['dump_dir'])
         try:
@@ -1180,9 +1190,9 @@ class DumpEngine:
 
         dump_dir None skips npm install (frida-objc-bridge is already in place).
         """
-        commands = [(frida_versions.install_command(version), script_dir)]
+        commands = [(frida_versions.install_command(version), None if app_paths.FROZEN else script_dir)]
         # dump.py also needs scp (from the tool's own Python); tqdm is replaced by dump_worker.py.
-        if importlib.util.find_spec('scp') is None:
+        if not app_paths.FROZEN and importlib.util.find_spec('scp') is None:
             commands.append((pip_install(['scp>=0.15']), script_dir))
         if dump_dir:
             # frida-objc-bridge is installed into the frida-ios-dump checkout that dump.py bundles from.
@@ -1193,7 +1203,7 @@ class DumpEngine:
         """Run one install command, logging its output; True on success."""
         self.post(self.log, '$ ' + ' '.join(command))
         try:
-            process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE,
+            process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, text=True, encoding='utf-8',
                                        errors='replace', shell=IS_WINDOWS and command[0] == 'npm',
                                        creationflags=NO_WINDOW)
@@ -1227,6 +1237,16 @@ class DumpEngine:
                     return False
             commands = self._install_commands(version, dump_dir)
             frida_versions.prepare_install(version)
+            if app_paths.FROZEN:
+                # No pip in the released program: the wheel is downloaded and unpacked.
+                try:
+                    frida_versions.install_wheel(version, lambda text: self.post(self.log, text))
+                except Exception as error:
+                    self.post(self.log, Text('log_exec_failed', error=error))
+                    shutil.rmtree(frida_versions.staging(version), ignore_errors=True)
+                    return False
+                frida_versions.finish_install(version)
+                return all(self._run_command(*command) for command in commands[1:])
             if self._run_command(*commands[0]):
                 frida_versions.finish_install(version)
                 return all(self._run_command(*command) for command in commands[1:])

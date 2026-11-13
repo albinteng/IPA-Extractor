@@ -1,0 +1,103 @@
+name: release
+# Builds the program that runs without Python (Nuitka, see build.py) for Windows, Linux and macOS (Intel and Apple
+# Silicon) when a version tag is pushed, and attaches the archives to that version's release (a draft is created when
+# there is none yet; its title and notes are filled in on GitHub before it is published). Run by hand (workflow_dispatch) it only builds, and keeps the archives as workflow artifacts.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write      # the release step attaches the archives to the release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: windows-x64, os: windows-latest}
+          - {name: linux-x64, os: ubuntu-22.04}
+          - {name: macos-intel, os: macos-15-intel}
+          - {name: macos-apple-silicon, os: macos-latest}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check that the tag is the version of the program
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          VERSION=$(python -c "import re; print(re.search(r\"__version__ = '([^']+)'\", open('engine.py', encoding='utf-8').read()).group(1))")
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then echo "tag $GITHUB_REF_NAME, but engine.py says $VERSION"; exit 1; fi
+      - name: Install Tk and patchelf (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk tk-dev patchelf
+      - name: Install packages
+        shell: bash
+        run: |
+          python -m pip install nuitka 'paramiko>=3' cryptography 'scp>=0.15' zstandard ordered-set
+          if [ "$RUNNER_OS" = Linux ]; then python -m pip install sv-ttk; fi
+      - name: Make the macOS app icon
+        if: runner.os == 'macOS'
+        run: |
+          mkdir icon.iconset
+          for size in 16 32 128 256 512; do
+            sips -z $size $size assets/icon_1024.png --out icon.iconset/icon_${size}x${size}.png
+            sips -z $((size * 2)) $((size * 2)) assets/icon_1024.png --out icon.iconset/icon_${size}x${size}@2x.png
+          done
+          iconutil -c icns icon.iconset -o assets/icon.icns
+      - name: Build
+        run: python build.py
+      - name: Check that the program starts and runs its helper mode
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then BIN="build/ipa_extractor.app/Contents/MacOS/IPA-Extractor"
+          elif [ "$RUNNER_OS" = Windows ]; then BIN="build/IPA-Extractor.exe"
+          else BIN="build/IPA-Extractor"; fi
+          "$BIN" --help | head -5
+          "$BIN" devices || true
+          # The riskiest part: a frida downloaded as a wheel has to load into the compiled program.
+          "$BIN" install-frida --version 16.6.6
+          if [ "$RUNNER_OS" = macOS ]; then FRIDA="$HOME/Library/Application Support/IPA Extractor/frida_versions/16.6.6"
+          else FRIDA="$(cd "$(dirname "$BIN")" && (pwd -W 2>/dev/null || pwd))/frida_versions/16.6.6"; fi
+          PYTHONPATH="$FRIDA" "$BIN" --worker frida_probe 127.0.0.1:1 | tee probe.txt || true   # it cannot connect; it only has to load frida
+          grep -q '"frida": "16.6.6"' probe.txt
+      - name: Archive
+        shell: bash
+        run: |
+          mkdir -p out
+          NAME="IPA-Extractor-${{ matrix.name }}"
+          if [ "$RUNNER_OS" = macOS ]; then
+            mv build/ipa_extractor.app "build/IPA Extractor.app"      # Nuitka names it after the script
+            ditto -c -k --keepParent --norsrc --noextattr --noqtn "build/IPA Extractor.app" "out/$NAME.zip"
+          elif [ "$RUNNER_OS" = Windows ]; then
+            (cd build && 7z a -tzip "../out/$NAME.zip" IPA-Extractor.exe)
+          else
+            tar -C build -czf "out/$NAME.tar.gz" IPA-Extractor      # one file; tar keeps it executable
+          fi
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: out/*
+
+  # One job creates the release once all four builds succeeded (four jobs creating it at the same time could make
+  # four drafts).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - run: ls -l out
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          draft: true
+          fail_on_unmatched_files: true
