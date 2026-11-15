@@ -354,5 +354,6 @@
   "family_frida_tip": "Decrittografa con Frida: richiede frida-server sul dispositivo e un frida corrispondente sul computer. Scegli qui sotto una delle due modalità Frida.",
   "log_start_native": "Estrazione di {n} IPA decrittografato/i con l'ausiliare nativo.",
   "reason_repair_helper": "l'ausiliare non è riuscito a partire o ha fallito ({error})",
-  "m_conn_switch": "Cambiando il tipo di connessione si interrompe la connessione attuale con il dispositivo. Continuare?"
+  "m_conn_switch": "Cambiando il tipo di connessione si interrompe la connessione attuale con il dispositivo. Continuare?",
+  "log_frida_substituted": "Viene usato frida {local} al posto di {device}: dalla 17.4 frida si interrompe su questo Mac, perché il suo framework CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) proviene da un vecchio Xcode. Aggiornando Xcode non serve più."
 }

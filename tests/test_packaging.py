@@ -139,7 +139,7 @@ class WheelTests(unittest.TestCase):
         with zipfile.ZipFile(buffer, 'w') as archive:
             archive.writestr('frida/__init__.py', '__version__ = "16.5.9"')
         root = tempfile.mkdtemp(prefix='frida-root-')
-        with mock.patch.object(frida_versions.urllib.request, 'urlopen', self.package(buffer.getvalue())), \
+        with mock.patch.object(frida_versions.net, 'urlopen', self.package(buffer.getvalue())), \
                 mock.patch.object(sys, 'platform', 'linux'), mock.patch.object(frida_versions.platform, 'machine', return_value='x86_64'):
             frida_versions.prepare_install('16.5.9', root)
             frida_versions.install_wheel('16.5.9', lambda text: None, root)
@@ -149,7 +149,7 @@ class WheelTests(unittest.TestCase):
 
     def test_a_download_that_does_not_match_its_checksum_is_refused(self):
         root = tempfile.mkdtemp(prefix='frida-root-')
-        with mock.patch.object(frida_versions.urllib.request, 'urlopen', self.package(b'data', digest='0' * 64)), \
+        with mock.patch.object(frida_versions.net, 'urlopen', self.package(b'data', digest='0' * 64)), \
                 mock.patch.object(sys, 'platform', 'linux'), mock.patch.object(frida_versions.platform, 'machine', return_value='x86_64'):
             frida_versions.prepare_install('16.5.9', root)
             with self.assertRaises(RuntimeError):
@@ -201,3 +201,58 @@ class ChildProcessTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CertificateTests(unittest.TestCase):
+    def test_bundle_is_used_when_python_has_no_certificates(self):
+        import net
+        empty = mock.Mock(**{'cert_store_stats.return_value': {'x509_ca': 0}})
+        loaded = []
+
+        def load(cafile):
+            loaded.append(cafile)
+            if cafile == net.CA_FILES[1]:
+                empty.cert_store_stats.return_value = {'x509_ca': 3}
+            else:
+                raise OSError('missing')
+        empty.load_verify_locations.side_effect = load
+        with mock.patch.object(net.ssl, 'create_default_context', return_value=empty):
+            self.assertIs(net.context(), empty)
+        self.assertEqual(loaded[-1], net.CA_FILES[1])
+
+    def test_default_certificates_are_enough_when_present(self):
+        import net
+        full = mock.Mock(**{'cert_store_stats.return_value': {'x509_ca': 100}})
+        with mock.patch.object(net.ssl, 'create_default_context', return_value=full):
+            net.context()
+        full.load_verify_locations.assert_not_called()
+
+
+class SimulatorTests(unittest.TestCase):
+    def test_old_coresimulator_keeps_frida_below_17_4(self):
+        import frida_versions
+        with mock.patch.object(frida_versions, 'simulator_aborts', return_value=True):
+            self.assertEqual(frida_versions.client_version('17.24.3'), '17.3.2')
+            self.assertEqual(frida_versions.client_version('16.6.6'), '16.6.6')
+            self.assertFalse(frida_versions.usable('17.4.0'))
+            self.assertTrue(frida_versions.usable('17.3.2'))
+            self.assertEqual(frida_versions.pick('17.24.3', ['17.24.3', '17.3.2']), '17.3.2')
+            self.assertIsNone(frida_versions.pick('17.24.3', ['17.24.3']))
+
+    def test_other_computers_use_the_version_of_the_device(self):
+        import frida_versions
+        with mock.patch.object(frida_versions, 'simulator_aborts', return_value=False):
+            self.assertEqual(frida_versions.client_version('17.24.3'), '17.24.3')
+            self.assertEqual(frida_versions.pick('17.24.3', ['17.24.3', '17.3.2']), '17.24.3')
+
+    def test_only_macos_is_checked(self):
+        import frida_versions
+        with mock.patch.object(frida_versions.sys, 'platform', 'win32'):
+            self.assertFalse(frida_versions.simulator_aborts())
+
+    def test_the_log_explains_the_substituted_version(self):
+        import engine
+        import frida_versions
+        with mock.patch.object(frida_versions, 'simulator_aborts', return_value=True):
+            self.assertEqual(engine.version_note('17.3.2', '17.24.3').key, 'log_frida_substituted')
+            self.assertEqual(engine.version_note('16.1.0', '16.6.6').key, 'log_minor')

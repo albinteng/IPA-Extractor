@@ -354,5 +354,6 @@
   "family_frida_tip": "Giải mã bằng Frida: cần frida-server trên thiết bị và frida tương thích trên máy tính. Chọn một trong hai chế độ Frida bên dưới.",
   "log_start_native": "Đang trích xuất {n} IPA đã giải mã bằng trình trợ giúp gốc.",
   "reason_repair_helper": "trình trợ giúp không chạy được hoặc thất bại ({error})",
-  "m_conn_switch": "Đổi cách kết nối sẽ ngắt kết nối hiện tại với thiết bị. Tiếp tục?"
+  "m_conn_switch": "Đổi cách kết nối sẽ ngắt kết nối hiện tại với thiết bị. Tiếp tục?",
+  "log_frida_substituted": "Dùng frida {local} thay cho {device}: từ 17.4 trở đi, frida bị dừng đột ngột trên máy Mac này vì framework CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) là của Xcode cũ. Cập nhật Xcode thì không cần làm vậy."
 }

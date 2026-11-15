@@ -354,5 +354,6 @@
   "family_frida_tip": "Entschlüsselt mit Frida: braucht frida-server auf dem Gerät und ein passendes frida auf dem Computer. Wählen Sie unten einen der beiden Frida-Modi.",
   "log_start_native": "{n} entschlüsselte IPA(s) werden mit dem nativen Helfer extrahiert.",
   "reason_repair_helper": "der Helfer konnte nicht laufen oder ist fehlgeschlagen ({error})",
-  "m_conn_switch": "Beim Wechsel der Verbindungsart wird die aktuelle Verbindung zum Gerät getrennt. Fortfahren?"
+  "m_conn_switch": "Beim Wechsel der Verbindungsart wird die aktuelle Verbindung zum Gerät getrennt. Fortfahren?",
+  "log_frida_substituted": "Es wird frida {local} statt {device} verwendet: Ab 17.4 bricht frida auf diesem Mac ab, weil das CoreSimulator-Framework (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) von einem alten Xcode stammt. Mit einem aktualisierten Xcode ist das nicht nötig."
 }

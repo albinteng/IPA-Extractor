@@ -354,5 +354,6 @@
   "family_native_tip": "Lemásolja a telepített alkalmazást, és két kis, az eszközön futó segédprogrammal fejti vissza a futtatható fájljait. Sem frida-server, sem frida-ios-dump nem szükséges. Az eszköz ellenőrzi a segédprogramok ellenőrző összegét, és SSH-n keresztül helyezi fel őket az eszközre (rootként, vagy mobile-ként sudóval). Ad-hoc aláírt programokat elfogadó jailbreak szükséges; csak arm64-es eszközök (a 32 bites szeletek titkosítva maradnak). Válassza ki lent a segédprogramot, vagy hagyja Automatikus beállításon.",
   "family_frida": "Frida",
   "family_frida_tip": "Fridával fejt vissza: az eszközön frida-server, a számítógépen pedig egyező frida szükséges. Válasszon a két alábbi Frida-mód közül.",
-  "m_conn_switch": "A kapcsolat módjának váltása leválasztja a jelenlegi eszközt. Folytatja?"
+  "m_conn_switch": "A kapcsolat módjának váltása leválasztja a jelenlegi eszközt. Folytatja?",
+  "log_frida_substituted": "A(z) {device} helyett a frida {local} verziót használja: a 17.4-től a frida leáll ezen a Macen, mert a CoreSimulator keretrendszer (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) egy régi Xcode-ból maradt. Az Xcode frissítése után ez nem szükséges."
 }

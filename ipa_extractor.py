@@ -42,7 +42,7 @@ from engine import (
     NO_WINDOW, THEMES, THEME_BLACK, THEME_DARK, THEME_LIGHT, DumpEngine, Indented, SSHTunnel, Text, __version__,
     connection_setting, decrypt_method, download_frida_ios_dump, error_text, dump_dir_status, dump_method_setting, frida_method_setting,
     frida_releases, frida_server_status, ios_major, is_apple_app, is_user_app, load_config, major, natural_key,
-    open_device, pip_install, probe_frida, resolve_theme, theme_setting)
+    open_device, pip_install, probe_frida, resolve_theme, theme_setting, version_note)
 
 CHECKED, UNCHECKED = '☑', '☐'
 # UI colours per theme (the theme setting). Light keeps the platform's native look; dark and black
@@ -1250,7 +1250,7 @@ class DumpGUI(DumpEngine, tk.Tk):
             self.post(self._frida_missing, generation, device_version, then)
             return
         if version != device_version:
-            self.post(self.log, Text('log_minor', local=version, device=device_version))
+            self.post(self.log, version_note(version, device_version))
         tunnel = None
         try:
             tunnel = SSHTunnel(client.get_transport(), frida_port)
@@ -2143,7 +2143,7 @@ class DumpGUI(DumpEngine, tk.Tk):
             if self.ssh is not None and self.frida_version is None:
                 self.set_frida_state(Text('state_failed'), 'error')
             return
-        self.log(Text('log_frida_installed', version=version))
+        self.log(Text('log_frida_installed', version=frida_versions.client_version(version)))
         # No restart needed: reconnect so the best version for this device is picked again.
         if (self.ssh is not None and not self.dumping and self.needs_frida()
                 and (self.direct_method() or dump_dir_status(self.var_dump_dir.get().strip()) == 'ok')):

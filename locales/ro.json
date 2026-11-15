@@ -354,5 +354,6 @@
   "family_native_tip": "Copiază aplicația instalată și îi decriptează executabilele cu două programe ajutătoare mici care rulează pe dispozitiv. Nu este nevoie nici de frida-server, nici de frida-ios-dump. Instrumentul verifică suma de control a programelor ajutătoare și le pune pe dispozitiv prin SSH (ca root sau ca mobile cu sudo). Necesită un jailbreak care acceptă programe semnate ad-hoc; doar dispozitive arm64 (secțiunile de 32 de biți rămân criptate). Alegeți programul ajutător mai jos sau lăsați Automat.",
   "family_frida": "Frida",
   "family_frida_tip": "Decriptează cu Frida: necesită frida-server pe dispozitiv și un frida potrivit pe computer. Alegeți unul dintre cele două moduri Frida de mai jos.",
-  "m_conn_switch": "Schimbarea metodei de conectare deconectează dispozitivul curent. Continuați?"
+  "m_conn_switch": "Schimbarea metodei de conectare deconectează dispozitivul curent. Continuați?",
+  "log_frida_substituted": "Se folosește frida {local} în loc de {device}: de la 17.4, frida se oprește brusc pe acest Mac, deoarece framework-ul CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) provine dintr-un Xcode vechi. Dacă actualizați Xcode, nu mai este necesar."
 }

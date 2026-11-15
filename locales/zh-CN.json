@@ -358,5 +358,6 @@
   "family_native_tip": "复制已安装的 App，用两个在设备上运行的小型 helper 程序解密它的可执行文件，不需要 frida-server，也不需要 frida-ios-dump。工具会校验 helper 的哈希值，再通过 SSH 放到设备上（以 root，或以 mobile 配合 sudo 运行）。需要接受临时签名程序的越狱环境；只支持 arm64 设备（App 的 32 位 slice 仍会保持加密）。helper 可在下方选择，或保持“自动”。",
   "family_frida": "Frida",
   "family_frida_tip": "用 Frida 解密：设备上要有 frida-server，电脑上要有匹配的 frida。请在下方选择两种 Frida 模式之一。",
-  "m_conn_switch": "切换连接方式会断开当前与设备的连接，要继续吗？"
+  "m_conn_switch": "切换连接方式会断开当前与设备的连接，要继续吗？",
+  "log_frida_substituted": "改用 frida {local} 而不是 {device}：frida 17.4 以后在这台 Mac 上会直接中止，因为它的 CoreSimulator 框架（/Library/Developer/PrivateFrameworks/CoreSimulator.framework）来自旧版 Xcode。更新 Xcode 后就不需要这样做。"
 }

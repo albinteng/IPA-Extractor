@@ -354,5 +354,6 @@
   "family_frida_tip": "Frida ile şifre çözer: cihazda frida-server, bilgisayarda uyumlu bir frida gerekir. Aşağıdaki iki Frida modundan birini seçin.",
   "log_start_native": "{n} şifresi çözülmüş IPA yerel yardımcıyla çıkarılıyor.",
   "reason_repair_helper": "yardımcı çalışamadı veya başarısız oldu ({error})",
-  "m_conn_switch": "Bağlantı yöntemini değiştirmek, cihazla olan mevcut bağlantıyı keser. Devam edilsin mi?"
+  "m_conn_switch": "Bağlantı yöntemini değiştirmek, cihazla olan mevcut bağlantıyı keser. Devam edilsin mi?",
+  "log_frida_substituted": "{device} yerine frida {local} kullanılıyor: 17.4'ten itibaren frida bu Mac'te aniden sonlanıyor, çünkü CoreSimulator çerçevesi (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) eski bir Xcode'dan kalma. Xcode güncellenirse buna gerek kalmaz."
 }

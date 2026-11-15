@@ -354,5 +354,6 @@
   "family_native_tip": "Kopierar den installerade appen och dekrypterar dess körbara filer med två små hjälpprogram som körs på enheten. Varken frida-server eller frida-ios-dump behövs. Verktyget kontrollerar hjälpprogrammens kontrollsumma och lägger dem på enheten via SSH (som root, eller som mobile med sudo). Kräver en jailbreak som accepterar ad hoc-signerade program; endast arm64-enheter (32-bitars-slices förblir krypterade). Välj hjälpprogram nedan eller låt det stå på Automatiskt.",
   "family_frida": "Frida",
   "family_frida_tip": "Dekrypterar med Frida: kräver frida-server på enheten och en matchande frida på datorn. Välj ett av de två Frida-lägena nedan.",
-  "m_conn_switch": "Om du byter anslutningsmetod kopplas den aktuella enheten från. Vill du fortsätta?"
+  "m_conn_switch": "Om du byter anslutningsmetod kopplas den aktuella enheten från. Vill du fortsätta?",
+  "log_frida_substituted": "frida {local} används i stället för {device}: från 17.4 avbryts frida på den här Macen eftersom CoreSimulator-ramverket (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) kommer från en gammal Xcode. Uppdaterar du Xcode behövs det inte."
 }

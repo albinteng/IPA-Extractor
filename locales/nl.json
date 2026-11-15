@@ -354,5 +354,6 @@
   "family_frida_tip": "Ontsleutelt met Frida: vereist frida-server op het apparaat en een passende frida op de computer. Kies hieronder een van de twee Frida-modi.",
   "log_start_native": "{n} ontsleutelde IPA('s) extraheren met het native hulpprogramma.",
   "reason_repair_helper": "het hulpprogramma kon niet draaien of is mislukt ({error})",
-  "m_conn_switch": "Als je de verbindingsmethode wijzigt, wordt de huidige verbinding met het apparaat verbroken. Doorgaan?"
+  "m_conn_switch": "Als je de verbindingsmethode wijzigt, wordt de huidige verbinding met het apparaat verbroken. Doorgaan?",
+  "log_frida_substituted": "frida {local} wordt gebruikt in plaats van {device}: vanaf 17.4 stopt frida abrupt op deze Mac, omdat het CoreSimulator-framework (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) van een oude Xcode komt. Na het updaten van Xcode is dit niet nodig."
 }

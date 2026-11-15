@@ -354,5 +354,6 @@
   "family_frida_tip": "Descifra con Frida: necesita frida-server en el dispositivo y un frida compatible en el ordenador. Elige abajo uno de los dos modos de Frida.",
   "log_start_native": "Extrayendo {n} IPA descifrado(s) con el auxiliar nativo.",
   "reason_repair_helper": "el auxiliar no pudo ejecutarse o falló ({error})",
-  "m_conn_switch": "Cambiar el modo de conexión cerrará la conexión actual con el dispositivo. ¿Continuar?"
+  "m_conn_switch": "Cambiar el modo de conexión cerrará la conexión actual con el dispositivo. ¿Continuar?",
+  "log_frida_substituted": "Se usa frida {local} en lugar de {device}: desde la 17.4, frida se cierra de golpe en este Mac, porque su framework CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) es de un Xcode antiguo. Actualizar Xcode lo hace innecesario."
 }

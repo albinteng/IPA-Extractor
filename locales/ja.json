@@ -358,5 +358,6 @@
   "family_frida_tip": "Frida で復号します。デバイスに frida-server、コンピューターに対応する frida が必要です。下の 2 つの Frida モードから選びます。",
   "log_start_native": "ネイティブヘルパーで復号 IPA を {n} 件抽出します。",
   "reason_repair_helper": "ヘルパーを実行できなかったか、失敗しました（{error}）",
-  "m_conn_switch": "接続方法を切り替えると、現在のデバイスとの接続が切断されます。続行しますか？"
+  "m_conn_switch": "接続方法を切り替えると、現在のデバイスとの接続が切断されます。続行しますか？",
+  "log_frida_substituted": "frida {device} ではなく frida {local} を使います。frida 17.4 以降はこの Mac で異常終了します。CoreSimulator フレームワーク（/Library/Developer/PrivateFrameworks/CoreSimulator.framework）が古い Xcode のものであるためです。Xcode を更新すれば不要になります。"
 }

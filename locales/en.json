@@ -354,5 +354,6 @@
   "family_native_tip": "Copies the installed app and decrypts its executables with two small helper programs that run on the device. Neither frida-server nor frida-ios-dump is needed. The tool checks the helpers' checksum and puts them on the device over SSH (as root, or as mobile with sudo). Needs a jailbreak that accepts ad-hoc signed programs; arm64 devices only (32-bit slices stay encrypted). Choose the helper below, or leave it on Automatic.",
   "family_frida": "Frida",
   "family_frida_tip": "Decrypts with Frida: needs frida-server on the device and a matching frida on the computer. Choose one of the two Frida modes below.",
-  "m_conn_switch": "Switching the connection method disconnects the current device. Continue?"
+  "m_conn_switch": "Switching the connection method disconnects the current device. Continue?",
+  "log_frida_substituted": "frida {local} is used instead of {device}: from 17.4 on, frida aborts on this Mac because its CoreSimulator framework (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) is from an old Xcode. Updating Xcode makes this unnecessary."
 }

@@ -354,5 +354,6 @@
   "family_frida_tip": "Descriptografa com Frida: requer frida-server no dispositivo e um frida compatível no computador. Escolha abaixo um dos dois modos Frida.",
   "log_start_native": "Extraindo {n} IPA(s) descriptografado(s) com o auxiliar nativo.",
   "reason_repair_helper": "o auxiliar não pôde ser executado ou falhou ({error})",
-  "m_conn_switch": "Trocar o modo de conexão encerra a conexão atual com o dispositivo. Continuar?"
+  "m_conn_switch": "Trocar o modo de conexão encerra a conexão atual com o dispositivo. Continuar?",
+  "log_frida_substituted": "O frida {local} é usado no lugar do {device}: a partir da 17.4, o frida encerra de repente neste Mac, porque o framework CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) vem de um Xcode antigo. Atualizar o Xcode torna isso desnecessário."
 }

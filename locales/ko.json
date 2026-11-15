@@ -357,5 +357,6 @@
   "family_frida_tip": "Frida로 복호화합니다. 기기에 frida-server가, 컴퓨터에 맞는 frida가 필요합니다. 아래에서 두 가지 Frida 모드 중 하나를 선택하세요.",
   "log_start_native": "네이티브 도우미로 복호화 IPA {n}개를 추출합니다.",
   "reason_repair_helper": "도우미를 실행할 수 없거나 실패했습니다({error})",
-  "m_conn_switch": "연결 방식을 바꾸면 현재 기기와의 연결이 끊어집니다. 계속할까요?"
+  "m_conn_switch": "연결 방식을 바꾸면 현재 기기와의 연결이 끊어집니다. 계속할까요?",
+  "log_frida_substituted": "frida {device} 대신 frida {local}을(를) 사용합니다. frida 17.4 이상은 이 Mac에서 강제 종료됩니다. CoreSimulator 프레임워크(/Library/Developer/PrivateFrameworks/CoreSimulator.framework)가 오래된 Xcode의 것이기 때문입니다. Xcode를 업데이트하면 필요하지 않습니다."
 }

@@ -354,5 +354,6 @@
   "family_native_tip": "Copia a app instalada e desencripta os seus executáveis com dois pequenos programas auxiliares executados no dispositivo. Não são necessários nem o frida-server nem o frida-ios-dump. A ferramenta verifica o checksum dos auxiliares e coloca-os no dispositivo por SSH (como root, ou como mobile com sudo). Precisa de um jailbreak que aceite programas com assinatura ad hoc; apenas dispositivos arm64 (as slices de 32 bits ficam encriptadas). Escolha abaixo o auxiliar ou deixe em Automático.",
   "family_frida": "Frida",
   "family_frida_tip": "Desencripta com o Frida: precisa do frida-server no dispositivo e de um frida compatível no computador. Escolha abaixo um dos dois modos Frida.",
-  "m_conn_switch": "Mudar o método de ligação desliga o dispositivo atual. Continuar?"
+  "m_conn_switch": "Mudar o método de ligação desliga o dispositivo atual. Continuar?",
+  "log_frida_substituted": "É usado o frida {local} em vez do {device}: a partir da 17.4, o frida termina abruptamente neste Mac, porque a framework CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) vem de um Xcode antigo. Atualizar o Xcode torna isto desnecessário."
 }

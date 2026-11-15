@@ -15,10 +15,10 @@ import re
 import shutil
 import sys
 import tempfile
-import urllib.request
 import zipfile
 
 import app_paths
+import net
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 VERSION_RE = re.compile(r'\d+\.\d+\.\d+')
@@ -48,6 +48,48 @@ def major(version):
     return (version or '').split('.')[0]
 
 
+# Since 17.4.0 frida also lists the iOS simulators, and does so by looking up 12 names in the CoreSimulator framework
+# of the Mac. A framework left over from an old Xcode lacks some of them and frida then aborts the whole process
+# at its first use ("assertion failed: (str != NULL)"), however the device is connected. 17.3.2 has no such code and
+# works with a newer frida-server.
+SIMULATOR_FRAMEWORK = '/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator'
+SIMULATOR_NAMES = (
+    'SimDeviceLaunchApplicationKeyArguments', 'SimDeviceLaunchApplicationKeyEnvironment',
+    'SimDeviceLaunchApplicationKeyStandardErrPath', 'SimDeviceLaunchApplicationKeyStandardOutPath',
+    'SimDeviceLaunchApplicationKeyTerminateRunningProcess', 'SimDeviceLaunchApplicationKeyWaitForDebugger',
+    'SimDeviceSpawnKeyArguments', 'SimDeviceSpawnKeyEnvironment', 'SimDeviceSpawnKeyStderr',
+    'SimDeviceSpawnKeyStdin', 'SimDeviceSpawnKeyStdout', 'SimDeviceSpawnKeyWaitForDebugger')
+SIMULATOR_FROM = (17, 4, 0)
+SIMULATOR_SAFE = '17.3.2'
+
+
+def simulator_aborts():
+    """True on a Mac whose CoreSimulator makes frida 17.4 and later abort."""
+    if sys.platform != 'darwin' or not os.path.exists(SIMULATOR_FRAMEWORK):
+        return False
+    import ctypes
+    try:
+        framework = ctypes.CDLL(SIMULATOR_FRAMEWORK)
+    except OSError:
+        return False        # frida skips the simulators when it cannot load it
+    for name in SIMULATOR_NAMES:
+        try:
+            ctypes.c_void_p.in_dll(framework, name)
+        except ValueError:
+            return True
+    return False
+
+
+def usable(version):
+    """False for a frida that would abort on this computer."""
+    return not (version_key(version) >= SIMULATOR_FROM and simulator_aborts())
+
+
+def client_version(device_version):
+    """The frida to install and run for a frida-server of device_version."""
+    return device_version if usable(device_version) else SIMULATOR_SAFE
+
+
 def folder(version, root=None):
     return os.path.join(root or ROOT, version)
 
@@ -68,9 +110,10 @@ def pick(device_version, versions):
     """The installed version to use with device_version: the same one, else the newest of its major."""
     if not device_version:
         return None
-    if device_version in versions:
-        return device_version
-    same_major = [v for v in versions if major(v) == major(device_version)]
+    wanted = client_version(device_version)
+    if wanted in versions:
+        return wanted
+    same_major = [v for v in versions if major(v) == major(device_version) and usable(v)]
     return max(same_major, key=version_key) if same_major else None
 
 
@@ -141,13 +184,13 @@ def install_legacy(version, log, root=None):
     """
     def download(url):
         log('Downloading ' + url)
-        with urllib.request.urlopen(url, timeout=60) as response:
+        with net.urlopen(url, timeout=60) as response:
             return response.read()
 
     if not legacy_supported():
         raise RuntimeError('frida {} needs Python 3.8, which this tool sets up on Windows x64 only'.format(version))
     path = staging(version, root)
-    with urllib.request.urlopen(PYPI_URL.format(version), timeout=30) as response:
+    with net.urlopen(PYPI_URL.format(version), timeout=30) as response:
         files = json.load(response)['urls']
     egg = next((f for f in files if f['filename'] == egg_name(version)), None)
     if egg is None:
@@ -187,14 +230,14 @@ def install_wheel(version, log, root=None):
 
     log(text) reports progress. Raises on failure; finish_install() then moves it into place.
     """
-    with urllib.request.urlopen(PYPI_URL.format(version), timeout=30) as response:
+    with net.urlopen(PYPI_URL.format(version), timeout=30) as response:
         files = json.load(response)['urls']
     wheel = next((f for f in files if wheel_matches(f['filename']) and not f.get('yanked')), None)
     if wheel is None:
         raise RuntimeError('frida {} has no wheel for this computer ({} {})'.format(
             version, sys.platform, platform.machine()))
     log('Downloading ' + wheel['url'])
-    with urllib.request.urlopen(wheel['url'], timeout=120) as response:
+    with net.urlopen(wheel['url'], timeout=120) as response:
         data = response.read()
     if hashlib.sha256(data).hexdigest() != wheel.get('digests', {}).get('sha256'):
         raise RuntimeError('the downloaded {} does not match its checksum'.format(wheel['filename']))

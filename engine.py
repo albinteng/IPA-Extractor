@@ -307,8 +307,8 @@ def wheel_platform_pattern():
 
 def frida_releases():
     """Stable frida versions on PyPI, newest first, limited to ones with a wheel for this Python."""
-    import urllib.request
-    with urllib.request.urlopen(PYPI_FRIDA_URL, timeout=20) as response:
+    import net
+    with net.urlopen(PYPI_FRIDA_URL, timeout=20) as response:
         releases = json.load(response)['releases']
     python_tag = 'cp{}{}'.format(*sys.version_info[:2])
     platform_tag = re.compile(wheel_platform_pattern())
@@ -319,6 +319,7 @@ def frida_releases():
 
     versions = [v for v, files in releases.items() if re.fullmatch(r'\d+\.\d+\.\d+', v) and installable(files)]
     versions += frida_versions.legacy_versions(releases)
+    versions = [v for v in versions if frida_versions.usable(v)]
     return sorted(versions, key=lambda v: tuple(int(n) for n in v.split('.')), reverse=True)
 
 
@@ -336,6 +337,13 @@ def frida_server_status(client):
 
 
 major = frida_versions.major
+
+
+def version_note(local, device):
+    """The log line for a frida on this computer that differs from the device's frida-server."""
+    if local == frida_versions.client_version(device):
+        return Text('log_frida_substituted', local=local, device=device)     # a Mac frida 17.4+ would crash
+    return Text('log_minor', local=local, device=device)
 
 
 def ios_major(device_os):
@@ -457,11 +465,11 @@ def download_frida_ios_dump(target, log):
         if os.path.isdir(target) and not os.listdir(target):
             os.rmdir(target)
     import io
-    import urllib.request
+    import net
     import zipfile
     url = FRIDA_IOS_DUMP_URL + '/archive/refs/heads/master.zip'
     log(url)
-    with urllib.request.urlopen(url, timeout=60) as response:
+    with net.urlopen(url, timeout=60) as response:
         archive = zipfile.ZipFile(io.BytesIO(response.read()))
     staging = target.rstrip('\\/') + '.download'
     archive.extractall(staging)
@@ -1223,6 +1231,9 @@ class DumpEngine:
 
     def install_frida(self, version, dump_dir):
         """Install frida `version` side by side with the others, logging as it goes; True on success."""
+        wanted, version = version, frida_versions.client_version(version)
+        if version != wanted:
+            self.post(self.log, version_note(version, wanted))
         try:
             if frida_versions.is_legacy(version):
                 # No wheel for this Python: its own Python 3.8 and the frida egg (frida-ios-dump needs frida 16).

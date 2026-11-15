@@ -354,5 +354,6 @@
   "family_frida_tip": "Odszyfrowuje przez Frida: wymaga frida-server na urządzeniu i pasującej frida na komputerze. Wybierz poniżej jeden z dwóch trybów Frida.",
   "log_start_native": "Wyodrębnianie odszyfrowanych IPA ({n}) natywnym programem pomocniczym.",
   "reason_repair_helper": "program pomocniczy nie mógł się uruchomić lub zawiódł ({error})",
-  "m_conn_switch": "Zmiana sposobu połączenia rozłączy bieżące połączenie z urządzeniem. Kontynuować?"
+  "m_conn_switch": "Zmiana sposobu połączenia rozłączy bieżące połączenie z urządzeniem. Kontynuować?",
+  "log_frida_substituted": "Używana jest frida {local} zamiast {device}: od wersji 17.4 frida kończy się awaryjnie na tym Macu, ponieważ framework CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) pochodzi ze starego Xcode. Po aktualizacji Xcode nie jest to potrzebne."
 }

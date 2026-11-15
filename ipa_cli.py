@@ -416,7 +416,7 @@ class Cli(core.DumpEngine):
             if version is None:
                 raise CliError('frida {} was installed but cannot be used'.format(device_version))
         if version != device_version:
-            self.log(Text('log_minor', local=version, device=device_version))
+            self.log(core.version_note(version, device_version))
         tunnel = None
         try:
             tunnel = core.SSHTunnel(self.ssh.get_transport(), port)
@@ -624,7 +624,7 @@ def cmd_install_frida(cli):
             raise CliError('{} is not a frida-ios-dump folder (see: install-frida-ios-dump)'.format(dump_dir))
     ok = cli.install_frida(version, dump_dir)
     if ok:
-        cli.log(Text('log_frida_installed', version=version))
+        cli.log(Text('log_frida_installed', version=frida_versions.client_version(version)))
     return EXIT_OK if ok else EXIT_FAILED
 
 

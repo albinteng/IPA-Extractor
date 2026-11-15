@@ -354,5 +354,6 @@
   "family_frida_tip": "Mendekripsi dengan Frida: memerlukan frida-server di perangkat dan frida yang cocok di komputer. Pilih salah satu dari dua mode Frida di bawah.",
   "log_start_native": "Mengekstrak {n} IPA terdekripsi dengan pembantu native.",
   "reason_repair_helper": "pembantu tidak bisa berjalan atau gagal ({error})",
-  "m_conn_switch": "Mengganti cara koneksi akan memutus koneksi ke perangkat saat ini. Lanjutkan?"
+  "m_conn_switch": "Mengganti cara koneksi akan memutus koneksi ke perangkat saat ini. Lanjutkan?",
+  "log_frida_substituted": "frida {local} dipakai, bukan {device}: mulai 17.4, frida berhenti mendadak di Mac ini karena framework CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) berasal dari Xcode lama. Memperbarui Xcode membuat ini tidak perlu."
 }

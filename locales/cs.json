@@ -354,5 +354,6 @@
   "family_native_tip": "Zkopíruje nainstalovanou aplikaci a dešifruje její spustitelné soubory pomocí dvou malých pomocných programů, které běží v zařízení. Není potřeba frida-server ani frida-ios-dump. Nástroj ověří kontrolní součet pomocných programů a přenese je do zařízení přes SSH (jako root, nebo jako mobile pomocí sudo). Vyžaduje jailbreak, který přijímá ad-hoc podepsané programy; pouze zařízení arm64 (32bitové slice zůstanou šifrované). Vyberte pomocný program níže, nebo ponechte Automaticky.",
   "family_frida": "Frida",
   "family_frida_tip": "Dešifruje pomocí Frida: vyžaduje frida-server v zařízení a odpovídající frida v počítači. Vyberte jeden ze dvou režimů Frida níže.",
-  "m_conn_switch": "Změna způsobu připojení odpojí aktuální zařízení. Pokračovat?"
+  "m_conn_switch": "Změna způsobu připojení odpojí aktuální zařízení. Pokračovat?",
+  "log_frida_substituted": "Používá se frida {local} místo {device}: od verze 17.4 frida na tomto Macu havaruje, protože framework CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) pochází ze starého Xcode. Po aktualizaci Xcode to není potřeba."
 }

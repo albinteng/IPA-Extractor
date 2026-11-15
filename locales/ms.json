@@ -354,5 +354,6 @@
   "family_frida_tip": "Menyahsulit dengan Frida: memerlukan frida-server pada peranti dan frida yang sepadan pada komputer. Pilih salah satu daripada dua mod Frida di bawah.",
   "log_start_native": "Mengekstrak {n} IPA dinyahsulit dengan pembantu natif.",
   "reason_repair_helper": "pembantu tidak dapat dijalankan atau gagal ({error})",
-  "m_conn_switch": "Menukar kaedah sambungan akan memutuskan sambungan ke peranti semasa. Teruskan?"
+  "m_conn_switch": "Menukar kaedah sambungan akan memutuskan sambungan ke peranti semasa. Teruskan?",
+  "log_frida_substituted": "frida {local} digunakan, bukan {device}: mulai 17.4, frida terhenti secara tiba-tiba pada Mac ini kerana rangka kerja CoreSimulator (/Library/Developer/PrivateFrameworks/CoreSimulator.framework) datang daripada Xcode lama. Mengemas kini Xcode menjadikannya tidak perlu."
 }
