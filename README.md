@@ -53,25 +53,25 @@ The `frida` used on the computer must match the major version of frida-server on
 
 ## Getting started
 
-You can download a program that runs without Python (from version 4.1 on), or run the Python source.
+You can download a program that runs without Python, or run the Python source.
 
 ### Download and run (no Python needed)
 
-Every [release](https://github.com/albinteng/IPA-Extractor/releases) from version 4.1 on has four files under *Assets*; releases before 4.1 have only the source code. The programs are not signed.
+Download the file for your computer from the [Releases](https://github.com/albinteng/IPA-Extractor/releases) page, under *Assets*. If a release has none, use its source code (see [Run from source](#run-from-source)). The programs are not signed.
 
 | Computer | File | What it contains |
 | --- | --- | --- |
-| Windows (x64) | `IPA-Extractor-windows-x64.zip` | `IPA-Extractor.exe`, a single file |
-| Linux (x64) | `IPA-Extractor-linux-x64.tar.gz` | `IPA-Extractor`, a single file |
-| macOS, Intel | `IPA-Extractor-macos-intel.zip` | `IPA Extractor.app` |
-| macOS, Apple Silicon | `IPA-Extractor-macos-apple-silicon.zip` | `IPA Extractor.app` |
+| Windows (x64) | `windows-x64.zip` | `IPA-Extractor.exe`, a single file |
+| Linux (x64) | `linux-x64.tar.gz` | `IPA-Extractor`, a single file |
+| macOS, Intel | `macos-intel.zip` | `IPA Extractor.app` |
+| macOS, Apple Silicon | `macos-apple-silicon.zip` | `IPA Extractor.app` |
 
 Started without arguments, the program opens the window. Started with arguments, it is the command line (see [CLI](#cli); every command works).
 
 #### Windows
 
-1. Unzip `IPA-Extractor.exe` into a folder of its own: the settings, the output and the downloaded Frida versions are kept beside it.
-2. Double-click it for the window. For the command line open cmd or PowerShell in that folder (a double click shows no console, so the command line prints nothing there):
+1. Unzip the archive into a folder of its own: the settings, the output and the downloaded Frida versions are kept beside `IPA-Extractor.exe`.
+2. Double-click `IPA-Extractor.exe` for the window. For the command line open cmd or PowerShell in that folder (a double click shows no console, so the command line prints nothing there):
 
 ```
 IPA-Extractor.exe devices
@@ -84,7 +84,7 @@ IPA-Extractor.exe decrypt --mode frida-direct --usb com.example.app
 2. Start it from a terminal, or double-click it in a file manager that runs executables:
 
 ```sh
-tar -xzf IPA-Extractor-linux-x64.tar.gz
+tar -xzf IPA-Extractor-*-linux-x64.tar.gz
 chmod +x IPA-Extractor            # only if the executable flag was lost
 ./IPA-Extractor                   # the window
 ./IPA-Extractor apps --ssh -H 192.168.1.20 -u root

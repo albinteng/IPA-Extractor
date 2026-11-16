@@ -69,7 +69,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p out
-          NAME="IPA-Extractor-${{ matrix.name }}"
+          VERSION=$(python -c "import re; print(re.search(r\"__version__ = '([^']+)'\", open('engine.py', encoding='utf-8').read()).group(1))")
+          NAME="IPA-Extractor-v$VERSION-${{ matrix.name }}"
           if [ "$RUNNER_OS" = macOS ]; then
             mv build/ipa_extractor.app "build/IPA Extractor.app"      # Nuitka names it after the script
             ditto -c -k --keepParent --norsrc --noextattr --noqtn "build/IPA Extractor.app" "out/$NAME.zip"
