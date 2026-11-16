@@ -209,6 +209,16 @@ class DumpWorkerTests(unittest.TestCase):
                                 capture_output=True, text=True, check=True).stdout
         self.assertEqual(output.strip(), "['-H', 'host', '-P-secret']")      # joined to its option
 
+    def test_an_empty_password_is_still_a_value_of_its_option(self):
+        code = ('import dump_worker, runpy, sys\n'
+                'dump_worker.use_long_paths = lambda: None      # that needs scp, which this test is not about\n'
+                'runpy.run_path = lambda path, run_name: print(sys.argv[1:])\n'
+                'dump_worker.main()\n')
+        environment = dict(os.environ, FRIDA_DUMP_SSH_PASSWORD='')
+        output = subprocess.run([sys.executable, '-c', code, '-H', 'host'], cwd=ROOT, env=environment,
+                                capture_output=True, text=True, check=True).stdout
+        self.assertEqual(output.strip(), "['-H', 'host', '-P', '']")
+
     def test_reports_progress_as_json_lines(self):
         code = ('import dump_worker, sys, types\n'
                 'bar = dump_worker.ProgressBar(total=10)\n'
@@ -226,3 +236,19 @@ class DumpWorkerTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WorkingFilesTests(unittest.TestCase):
+    def test_only_a_stale_working_file_is_cleared(self):
+        import time
+        import engine
+        with tempfile.TemporaryDirectory() as folder:
+            old = os.path.join(folder, engine.WORKING_PREFIX + 'old.ipa')
+            fresh = os.path.join(folder, engine.WORKING_PREFIX + 'fresh.ipa')
+            for path in (old, fresh):
+                open(path, 'wb').close()
+            past = time.time() - engine.STALE_WORKING_SECONDS - 60
+            os.utime(old, (past, past))
+            engine.DumpEngine._clear_working(folder)             # a second program may be working on the fresh one
+            self.assertFalse(os.path.exists(old))
+            self.assertTrue(os.path.exists(fresh))

@@ -16,6 +16,7 @@ import re
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -137,6 +138,8 @@ DEFAULTS = dict(
 CONFIG_PATH = (os.path.join(app_paths.DATA_DIR, 'settings.json') if app_paths.FROZEN
                else os.path.join(script_dir, 'settings.json') if app_paths.writable(script_dir)
                else os.path.join(os.path.expanduser('~'), '.ipa_extractor.json'))
+STALE_WORKING_SECONDS = 3600     # an unfinished IPA untouched for this long was left by a run that died
+WORKING_PREFIX = '.working-'      # file name of an IPA still being decrypted and verified
 PYPI_FRIDA_URL = 'https://pypi.org/pypi/frida/json'
 PROGRESS_INTERVAL = 0.2      # seconds between progress updates while streaming an IPA
 # frida-server needs a few seconds to be respawned by launchd after it is killed.
@@ -189,11 +192,13 @@ def load_config(strict=False):
         return {}
 
     def fits(key, value):
-        default = DEFAULTS.get(key, value if key == 'password' else None)
+        default = DEFAULTS.get(key, '' if key == 'password' else None)
         if default is None:
             return True                                   # a key of a newer version: kept as it is
         return isinstance(value, type(default)) and isinstance(value, bool) == isinstance(default, bool)
 
+    if strict:
+        return data                       # kept whole: a value of the wrong type is not deleted by a later save
     return {key: value for key, value in data.items() if fits(key, value)}
 
 
@@ -207,7 +212,12 @@ def save_config(data):
         return
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)     # on macOS the folder is made by the first save
     temporary = CONFIG_PATH + '.tmp'          # written whole first: a crash leaves the old file, not half of a new one
-    with open(temporary, 'w', encoding='utf-8') as handle:
+    try:
+        os.remove(temporary)                  # a leftover keeps its old permissions
+    except OSError:
+        pass
+    # 0600: the file may hold the password, and other users of a Linux or macOS machine must not read it
+    with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w', encoding='utf-8') as handle:
         json.dump(data, handle, ensure_ascii=False, indent=2)
     os.replace(temporary, CONFIG_PATH)
 
@@ -353,7 +363,7 @@ def frida_server_status(client):
                                   "launchctl list 2>/dev/null | grep -E '^[0-9]+[[:space:]].*frida'; }} "
                                   '| grep -c .'.format(' '.join(FRIDA_SERVER_PATHS)))
     lines = [line.strip() for line in found.splitlines() if line.strip()]
-    version = lines[0] if len(lines) > 1 and re.match(r'^\d+\.\d+', lines[0]) else None
+    version = lines[0] if len(lines) > 1 and frida_versions.VERSION_RE.fullmatch(lines[0]) else None
     running = bool(lines) and lines[-1].isdigit() and int(lines[-1]) > 0
     return version, running
 
@@ -472,20 +482,68 @@ def classify_error(message):
     return next((kind for kind, needle in ERROR_PATTERNS if needle in message), None)
 
 
+CHILDREN = set()       # installs and downloads running as programs of their own, so that closing the window can end them
+CLONE_TIMEOUT = 300
+
+
+def kill_process(process):
+    """End a child program, with what it started (npm runs under cmd.exe on Windows)."""
+    if process.poll() is not None:
+        return
+    if IS_WINDOWS:
+        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], stdin=subprocess.DEVNULL,
+                       capture_output=True, creationflags=NO_WINDOW)
+    process.terminate()
+    try:
+        process.wait(10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
+def stop_children():
+    for process in list(CHILDREN):
+        kill_process(process)
+
+
+def _make_writable_and_retry(function, path, excinfo):
+    """rmtree handler: git's pack files are read-only, which Windows refuses to delete."""
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        function(path)
+    except OSError:
+        pass
+
+
 def download_frida_ios_dump(target, log):
     """Clone frida-ios-dump with git, or fall back to GitHub's zip archive."""
     if shutil.which('git'):
         # stdin must be given: a program started without a console (a double click) has no valid standard input.
-        process = subprocess.run(['git', 'clone', '--depth', '1', FRIDA_IOS_DUMP_URL + '.git', target],
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                 encoding='utf-8', errors='replace', creationflags=NO_WINDOW)
-        for line in process.stdout.splitlines():
+        process = subprocess.Popen(['git', 'clone', '--depth', '1', FRIDA_IOS_DUMP_URL + '.git', target],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True, encoding='utf-8', errors='replace', creationflags=NO_WINDOW)
+        CHILDREN.add(process)
+        try:
+            output = process.communicate(timeout=CLONE_TIMEOUT)[0]      # a stalled network must not wait for ever
+        except subprocess.TimeoutExpired:
+            kill_process(process)
+            output = ''
+            log('git clone did not finish in {} seconds'.format(CLONE_TIMEOUT))
+        finally:
+            CHILDREN.discard(process)
+            kill_process(process)
+        for line in output.splitlines():
             if line.strip():
                 log(line.strip())
         if process.returncode == 0:
             return
-        if os.path.isdir(target) and not os.listdir(target):
-            os.rmdir(target)
+        if os.path.isdir(target):
+            # A git killed by force (Windows) cannot clean up: what it left is its own half clone.
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(target, onexc=lambda function, path, error: _make_writable_and_retry(function, path, None))
+            else:
+                shutil.rmtree(target, onerror=_make_writable_and_retry)     # onerror is deprecated from 3.12
+            if os.path.isdir(target):
+                shutil.rmtree(target, ignore_errors=True)
     import io
     import net
     import zipfile
@@ -494,13 +552,15 @@ def download_frida_ios_dump(target, log):
     with net.urlopen(url, timeout=60) as response:
         archive = zipfile.ZipFile(io.BytesIO(response.read()))
     staging = target.rstrip('\\/') + '.download'
-    archive.extractall(staging)
-    top = os.path.join(staging, archive.namelist()[0].split('/')[0])
-    os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
-    if os.path.isdir(target):
-        os.rmdir(target)
-    shutil.move(top, target)
-    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        archive.extractall(staging)
+        top = os.path.join(staging, archive.namelist()[0].split('/')[0])
+        os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
+        if os.path.isdir(target):
+            os.rmdir(target)
+        shutil.move(top, target)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)       # also when a step failed: no folder is left behind
 
 
 class Text:
@@ -672,7 +732,11 @@ class DumpEngine:
         total = len(jobs)
         consecutive_frida_errors = 0
         paused = False
-        for index, (bundle, name) in enumerate(jobs):
+        self._clear_working(options['outdir'])
+        for index, (bundle, final_name) in enumerate(jobs):
+            # Worked on under a hidden name and renamed once verified: an IPA that is still encrypted (the program
+            # killed during the repair) never has a final name, which --skip-existing would take for finished.
+            name = WORKING_PREFIX + final_name
             if self.cancel_requested.is_set():
                 self.post(self.set_status, bundle, Text('st_cancelled'), 'failed')
                 continue
@@ -701,6 +765,8 @@ class DumpEngine:
                         and not self._restart_frida_server(options, bundle)):
                     break
                 self.post(self.log, Text('log_retry', bundle=bundle))
+            if not ok:
+                self._discard_working(options, name)        # what a failed attempt left is no result
             if ok:
                 consecutive_frida_errors = 0
                 pid = options.pop('pid', None)
@@ -718,6 +784,8 @@ class DumpEngine:
                     pass
                 if ok:
                     counts['succeeded'] += 1
+                else:
+                    self._discard_working(options, name)
             elif self.cancel_requested.is_set():
                 self.post(self.set_status, bundle, Text('st_cancelled'), 'failed')
             else:
@@ -729,6 +797,32 @@ class DumpEngine:
                 consecutive_frida_errors = consecutive_frida_errors + 1 if kind in RESTART_ERRORS else 0
                 if consecutive_frida_errors >= MAX_CONSECUTIVE_FRIDA_ERRORS:
                     paused = counts['paused'] = True
+
+    @staticmethod
+    def _clear_working(outdir):
+        """Remove what an earlier run that was killed left behind (a file may be hundreds of MB)."""
+        try:
+            names = os.listdir(outdir)
+        except OSError:
+            return
+        for entry in names:
+            if entry.startswith(WORKING_PREFIX) and entry.endswith('.ipa'):
+                path = os.path.join(outdir, entry)
+                try:
+                    # Not what a second program (the window and the command line at once) is working on right now.
+                    if time.time() - os.path.getmtime(path) > STALE_WORKING_SECONDS:
+                        os.remove(path)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _discard_working(options, name):
+        if name in options.get('kept', ()):
+            return
+        try:
+            os.remove(os.path.join(options['outdir'], name + '.ipa'))
+        except OSError:
+            pass
 
     def _finish_dump(self, bundle, path, options, counts, pid=None):
         """Verify a freshly decrypted IPA (R1), decrypt what is still encrypted on the device (R2),
@@ -761,6 +855,18 @@ class DumpEngine:
                 path = final
             except OSError as error:
                 self.post(self.log, Text('log_rename_failed', path=final, error=error))
+                self.post(self.set_status, bundle, Text('st_failed', msg=error), 'failed')
+                # A good file: keep it, under a name that is visible and that the next batch does not clear.
+                saved = final[:-len('.ipa')] + ' (rename failed).ipa'     # the stem already says what the result is
+                try:
+                    os.replace(path, saved)
+                except OSError:
+                    saved = path
+                    options.setdefault('kept', set()).add(os.path.basename(path)[:-len('.ipa')])
+                    self.post(self.log, Text('log_rename_hidden', path=saved))     # a hidden name: say so
+                else:
+                    self.post(self.log, Text('log_rename_kept', path=saved))
+                return False
         # The user agreed to replace these; an older result under another name would be stale.
         for other in options['names'][bundle].values():
             stale = os.path.join(options['outdir'], other + '.ipa')
@@ -965,26 +1071,29 @@ class DumpEngine:
                     event = json.loads(line[2:])
                 except ValueError:
                     continue
-                if event['type'] == 'slice':
-                    job = by_id[event['id']]
-                    if event['ok']:
-                        job.done.add(event['index'])
-                        if job.repaired:
-                            self.post(self.log, Indented(Text('log_repaired',
-                                                              file=ipa_verify.short_name(job.member))))
-                    else:
-                        job.slice_errors[event['index']] = event['error']
-                elif event['type'] == 'error':
-                    for job in jobs:
-                        if job.untried():  # the others already have their own result
-                            job.error = ('frida', event['error'])
-                elif event['type'] == 'spawned':
-                    options.setdefault('repair_pids', []).append(event['pid'])  # left suspended; closed later
-                elif event['type'] == 'running_app':
-                    # iOS 16+ frameworks: unlike everything else, this lets the app's own code run.
-                    self.post(self.log, Text('log_repair_run_app', bundle=bundle))
-                elif event['type'] == 'log':
-                    self.post(self.log, '[{}] {}'.format(bundle, event['text']))
+                try:
+                    if event['type'] == 'slice':
+                        job = by_id[event['id']]
+                        if event['ok']:
+                            job.done.add(event['index'])
+                            if job.repaired:
+                                self.post(self.log, Indented(Text('log_repaired',
+                                                                  file=ipa_verify.short_name(job.member))))
+                        else:
+                            job.slice_errors[event['index']] = event['error']
+                    elif event['type'] == 'error':
+                        for job in jobs:
+                            if job.untried():  # the others already have their own result
+                                job.error = ('frida', event['error'])
+                    elif event['type'] == 'spawned':
+                        options.setdefault('repair_pids', []).append(event['pid'])  # left suspended; closed later
+                    elif event['type'] == 'running_app':
+                        # iOS 16+ frameworks: unlike everything else, this lets the app's own code run.
+                        self.post(self.log, Text('log_repair_run_app', bundle=bundle))
+                    elif event['type'] == 'log':
+                        self.post(self.log, '[{}] {}'.format(bundle, event['text']))
+                except (KeyError, TypeError, IndexError, AttributeError):
+                    continue                 # a line missing a field is skipped, the worker goes on
             code = process.wait()
         finally:
             self.current_process = None
@@ -1104,45 +1213,52 @@ class DumpEngine:
                 time.sleep(1)
 
         threading.Thread(target=watchdog, daemon=True).start()
-        for line in process.stdout:
-            last_output[0] = time.monotonic()
-            line = line.rstrip()
-            if line.startswith('@@'):
-                try:
-                    event = json.loads(line[2:])
-                except ValueError:
-                    continue
-                if event['type'] == 'log':
-                    line = event['text']
-                else:
-                    total_bytes = event.get('total') or 0
-                    part = event['n'] / total_bytes if total_bytes else 0
-                    if event['desc'].startswith('App resources'):
-                        report(0.25 + 0.70 * part, Text('stage_resources' if total_bytes else 'stage_scan'))
+        try:
+            for line in process.stdout:
+                last_output[0] = time.monotonic()
+                line = line.rstrip()
+                if line.startswith('@@'):
+                    try:
+                        event = json.loads(line[2:])
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    if event.get('type') == 'log':
+                        line = str(event.get('text', ''))
                     else:
-                        report(0.10 + 0.15 * part, Text('stage_binary', file=event['desc']))
+                        total_bytes = event.get('total') or 0
+                        part = event.get('n', 0) / total_bytes if total_bytes else 0
+                        event.setdefault('desc', '')
+                        if event['desc'].startswith('App resources'):
+                            report(0.25 + 0.70 * part, Text('stage_resources' if total_bytes else 'stage_scan'))
+                        else:
+                            report(0.10 + 0.15 * part, Text('stage_binary', file=event['desc']))
+                        continue
+                if not line:
                     continue
-            if not line:
-                continue
-            if line.startswith('[debug]'):
-                if 'Spawning' in line:
-                    spawned = True
-                match = re.match(r'\[debug\] Attaching to PID (\d+)', line)
-                if match and spawned:
-                    spawned_pid = int(match.group(1))
-                if 'Spawning' in line or 'Attaching' in line:
-                    report(0.03, Text('stage_launch'))
-                elif 'Frida agent loaded' in line:
-                    report(0.06, Text('stage_injected'))
-                elif 'Packaging IPA' in line:
-                    report(0.96, Text('stage_package'))
-                continue
-            if line.startswith('start dump'):
-                binaries += 1
-                report(0.08, Text('stage_decrypt', n=binaries))
-            if line.startswith('*** Caught exception') or 'Error' in line or 'Failed' in line:
-                last_error = line.replace('*** Caught exception: ', '')
-            self.post(self.log, '[{}] {}'.format(bundle, line))
+                if line.startswith('[debug]'):
+                    if 'Spawning' in line:
+                        spawned = True
+                    match = re.match(r'\[debug\] Attaching to PID (\d+)', line)
+                    if match and spawned:
+                        spawned_pid = int(match.group(1))
+                    if 'Spawning' in line or 'Attaching' in line:
+                        report(0.03, Text('stage_launch'))
+                    elif 'Frida agent loaded' in line:
+                        report(0.06, Text('stage_injected'))
+                    elif 'Packaging IPA' in line:
+                        report(0.96, Text('stage_package'))
+                    continue
+                if line.startswith('start dump'):
+                    binaries += 1
+                    report(0.08, Text('stage_decrypt', n=binaries))
+                if line.startswith('*** Caught exception') or 'Error' in line or 'Failed' in line:
+                    last_error = line.replace('*** Caught exception: ', '')
+                self.post(self.log, '[{}] {}'.format(bundle, line))
+        finally:
+            if process.poll() is None:        # an error in this loop must not leave dump.py running
+                kill_process(process)
         code = process.wait()
         self.current_process = None
         # dump.py leaves the app running; hundreds of them would exhaust device memory
@@ -1243,10 +1359,15 @@ class DumpEngine:
             if command[0] == 'npm':
                 self.post(self.log, Text('log_need_node'))
             return False
-        for line in process.stdout:
-            if line.strip():
-                self.post(self.log, '  ' + line.rstrip())
-        code = process.wait()
+        CHILDREN.add(process)
+        try:
+            for line in process.stdout:
+                if line.strip():
+                    self.post(self.log, '  ' + line.rstrip())
+            code = process.wait()
+        finally:
+            CHILDREN.discard(process)
+            kill_process(process)          # Ctrl+C, closing the window or any error: pip and npm must not go on
         if code != 0:
             self.post(self.log, Text('log_cmd_failed', code=code))
             return False
@@ -1288,4 +1409,8 @@ class DumpEngine:
             return False
         except OSError as error:
             self.post(self.log, Text('log_exec_failed', error=error))
+            shutil.rmtree(frida_versions.staging(version), ignore_errors=True)      # also when finishing failed
             return False
+        except BaseException:                   # Ctrl+C: the half-installed folder must not stay
+            shutil.rmtree(frida_versions.staging(version), ignore_errors=True)
+            raise

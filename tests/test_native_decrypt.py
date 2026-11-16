@@ -1,6 +1,8 @@
 import hashlib
 import os
+import socket
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -111,7 +113,7 @@ class FakeDevice:
     def upload(self, method):
         return '/var/tmp/helpers/' + native_decrypt.BINARIES[method]
 
-    def run(self, command, timeout=60):
+    def run(self, command, timeout=60, cancelled=None, kill=None):
         self.commands.append(command)
         return self.responder(command)
 
@@ -299,6 +301,51 @@ class DeviceTests(unittest.TestCase):
         native_decrypt.Device(ssh, 'mobile', 'secret').run('true')
         stdin.write.assert_called_once_with('secret\n')
         stdin.channel.shutdown_write.assert_called_once_with()      # a wrong password must not leave sudo waiting
+
+
+    def streams(self, read):
+        ssh = mock.Mock()
+        stdout = mock.Mock()
+        stdout.read.side_effect = read
+        stderr = mock.Mock()
+        stderr.read.return_value = b''
+        ssh.exec_command.return_value = (mock.Mock(), stdout, stderr)
+        return ssh, stdout
+
+    def test_a_helper_that_says_nothing_ends_with_the_timeout(self):
+        def silent():
+            raise socket.timeout('timed out')
+
+        ssh, stdout = self.streams(silent)
+        with self.assertRaises(socket.timeout):
+            native_decrypt.Device(ssh, 'root', '').run('true', timeout=5)
+
+    def test_cancelling_closes_the_channel_and_stops_the_helper(self):
+        release = threading.Event()
+        ssh, stdout = self.streams(lambda: release.wait(10) and b'')
+        device = native_decrypt.Device(ssh, 'root', '')
+        device.stop = mock.Mock()
+        try:
+            result = device.run('true', timeout=60, cancelled=lambda: True, kill='out-abc')
+        finally:
+            release.set()
+        self.assertEqual(result[0], -1)
+        stdout.channel.close.assert_called_once_with()
+        device.stop.assert_called_once_with('out-abc')
+
+    def test_a_helper_is_stopped_by_pkill_or_else_killall(self):
+        device = native_decrypt.Device(mock.Mock(), 'root', '')
+        device.text = mock.Mock()
+        device.stop('mremap_decrypt-1a2b')
+        command = device.text.call_args.args[0]
+        self.assertIn("pkill -f '[m]remap_decrypt-1a2b'", command)
+        self.assertIn("killall mremap_decrypt-1a2b", command)
+
+    def test_the_pattern_to_stop_does_not_match_the_command_that_stops(self):
+        device = native_decrypt.Device(mock.Mock(), 'root', '')
+        device.text = mock.Mock()
+        device.stop('out-abc')
+        self.assertIn("'[o]ut-abc'", device.text.call_args.args[0])
 
 
 if __name__ == '__main__':

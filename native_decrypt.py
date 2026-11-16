@@ -22,7 +22,9 @@ import plistlib
 import posixpath
 import re
 import shlex
+import socket
 import threading
+import time
 import uuid
 
 AUTO, MREMAP, MEMORY = 'auto', 'mremap', 'memory'
@@ -94,8 +96,13 @@ class Device:
         self.folder = None      # where the helpers were put, once uploaded
         self.helpers = {}       # method -> path on the device
 
-    def run(self, command, timeout=60):
-        """(exit status, stdout bytes, stderr text) of a shell command run as root."""
+    def run(self, command, timeout=60, cancelled=None, kill=None):
+        """(exit status, stdout bytes, stderr text) of a shell command run as root.
+
+        cancelled() is asked twice a second while the command runs; once true the channel is closed, the
+        processes of the helper named `kill` (its file name on the device) are stopped, and the status is -1. A command that outlasts
+        `timeout` seconds raises socket.timeout.
+        """
         if self.user != 'root':
             # Rootless jailbreaks log in as mobile; sudo takes the same password.
             command = "sudo -S -p '' sh -c {}".format(shlex.quote(command))
@@ -105,13 +112,56 @@ class Device:
             stdin.flush()
             stdin.channel.shutdown_write()      # a wrong password must end sudo, not make it wait for another try
         # Both streams are read at once: a helper that logs a lot to stderr would otherwise block on a full window.
-        errors = []
-        reader = threading.Thread(target=lambda: errors.append(stderr.read()), daemon=True)
-        reader.start()
-        data = stdout.read()
-        reader.join()
+        errors, outputs, failures = [], [], []
+
+        def read(stream, into):
+            try:
+                into.append(stream.read())
+            except Exception as error:              # socket.timeout of a helper that says nothing
+                failures.append(error)
+
+        readers = [threading.Thread(target=read, args=(stderr, errors), daemon=True),
+                   threading.Thread(target=read, args=(stdout, outputs), daemon=True)]
+        for reader in readers:
+            reader.start()
+        deadline = time.monotonic() + timeout
+        while any(reader.is_alive() for reader in readers):
+            for reader in readers:
+                reader.join(0.25)
+            if cancelled is not None and cancelled():
+                stdout.channel.close()
+                for reader in readers:
+                    reader.join(5)
+                if kill:      # closing the channel does not stop a process without a terminal
+                    self.stop(kill)
+                return -1, b'', 'cancelled'
+            if time.monotonic() > deadline + 5:
+                stdout.channel.close()
+                if kill:
+                    self.stop(kill)
+                raise socket.timeout('the command did not finish in {} seconds'.format(timeout))
+        if failures:
+            if kill:                # a helper that said nothing: the read timed out, the helper is still running
+                self.stop(kill)
+            raise failures[0]
+        data = outputs[0] if outputs else b''
         error = (errors[0] if errors else b'').decode('utf-8', 'replace')
+        if not stdout.channel.status_event.wait(timeout):
+            raise socket.timeout('the command did not report an exit status')
         return stdout.channel.recv_exit_status(), data, error
+
+    def stop(self, helper):
+        """Stop the running processes of a helper, found by its file name (mremap_decrypt-<checksum>).
+
+        pkill comes with procps, which not every jailbreak has: killall is the fallback. The bracket keeps pkill
+        from matching its own command line.
+        """
+        name = shlex.quote(helper)
+        pattern = shlex.quote('[' + helper[0] + ']' + helper[1:])
+        try:
+            self.text('pkill -f {} 2>/dev/null || killall {} 2>/dev/null; true'.format(pattern, name), timeout=20)
+        except Exception:           # the connection is gone: nothing left to stop from here
+            pass
 
     def text(self, command, timeout=60):
         status, data, error = self.run(command, timeout)
@@ -213,11 +263,11 @@ def run_mremap(device, jobs, work, report, cancelled=lambda: False):
             data = b''
             try:
                 path = job.slice_paths.get(index, job.device_path)
-                status, data, error = _mremap_call(device, helper, path, slice_)
+                status, data, error = _mremap_call(device, helper, path, slice_, cancelled)
                 if status != 0 and '(errno 12)' in error and path != job.device_path:
                     # Some files (some app extensions) cannot be decrypted from a private copy but can from
                     # where they are installed.
-                    status, data, error = _mremap_call(device, helper, job.device_path, slice_)
+                    status, data, error = _mremap_call(device, helper, job.device_path, slice_, cancelled)
                 if status == 0 and len(data) != slice_.cryptsize:
                     status, error = 1, 'the helper returned {} of {} bytes'.format(len(data), slice_.cryptsize)
                 if status != 0:
@@ -231,11 +281,11 @@ def run_mremap(device, jobs, work, report, cancelled=lambda: False):
             report(job, index, None)
 
 
-def _mremap_call(device, helper, path, slice_):
+def _mremap_call(device, helper, path, slice_, cancelled=None):
     cpu, subtype = cpu_arguments(slice_)
     command = '{} {} {} {} {} {} {} {} -'.format(shlex.quote(helper), shlex.quote(path), slice_.offset, slice_.cryptoff,
                                                   slice_.cryptsize, slice_.cryptid, cpu, subtype)
-    return device.run(command, timeout=SLICE_TIMEOUT)
+    return device.run(command, timeout=SLICE_TIMEOUT, cancelled=cancelled, kill=posixpath.basename(helper))
 
 
 # ---------------------------------------------------------------- memory_decrypt
@@ -280,7 +330,7 @@ def run_memory(device, bundle, app_path, jobs, work, report, log=lambda text: No
         command = '{} dump --ranges --bundle-id {} {} {} {}'.format(shlex.quote(helper), shlex.quote(bundle),
                                                                    shlex.quote(executable), shlex.quote(app_path),
                                                                    shlex.quote(out))
-        status, data, error = device.run(command, timeout=RUN_TIMEOUT)
+        status, data, error = device.run(command, timeout=RUN_TIMEOUT, cancelled=cancelled, kill=posixpath.basename(helper))
         text = data.decode('utf-8', 'replace')
         for line in error.splitlines():
             if line.startswith('# '):

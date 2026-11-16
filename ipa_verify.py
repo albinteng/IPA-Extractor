@@ -8,10 +8,12 @@ Watch apps and frameworks the app had not loaded yet can stay FairPlay-encrypted
 Usage: ipa_verify.py FILE.ipa [...]   (prints one line per IPA and the encrypted files)
 """
 
+import plistlib
 import stat
 import struct
 import sys
 import zipfile
+import zlib
 
 from app_info import arch_name
 
@@ -181,8 +183,9 @@ class FileResult:
 
 
 class Result:
-    def __init__(self, files):
+    def __init__(self, files, executable=None):
         self.files = files  # every Mach-O found, in archive order
+        self.executable = executable    # Payload/X.app/Y named by the app's Info.plist, None when it names none
 
     @property
     def encrypted(self):
@@ -192,6 +195,10 @@ class Result:
     @property
     def main(self):
         """The app's own executable (Payload/X.app/X), None when the IPA has none."""
+        if self.executable:
+            named = next((f for f in self.files if f.name == self.executable), None)
+            if named is not None:
+                return named
         return next((f for f in self.files if len(f.name.split('/')) == 3 and f.name.startswith('Payload/')), None)
 
     @property
@@ -222,22 +229,37 @@ def _is_file(info):
     return not info.is_dir() and not stat.S_ISDIR(mode) and not stat.S_ISLNK(mode)
 
 
+def bundle_executable(archive):
+    """Payload/X.app/Y where Y is the CFBundleExecutable of the app's Info.plist; None when it cannot be told."""
+    for name in archive.namelist():
+        parts = name.split('/')
+        if len(parts) == 3 and parts[0] == 'Payload' and parts[1].endswith('.app') and parts[2] == 'Info.plist':
+            try:
+                executable = plistlib.loads(archive.read(name)).get('CFBundleExecutable')
+            except Exception:
+                return None
+            return '/'.join(parts[:2] + [executable]) if isinstance(executable, str) and executable else None
+    return None
+
+
 def verify_ipa(path):
     """Inspect every Mach-O in the IPA at path; raises OSError/zipfile.BadZipFile for unreadable IPAs."""
     files = []
     with zipfile.ZipFile(path) as archive:
+        executable = bundle_executable(archive)
         for info in archive.infolist():
             if not _is_file(info) or info.file_size < 28:
                 continue
-            with archive.open(info) as member:
-                try:
+            try:
+                with archive.open(info) as member:
                     slices = inspect(member)
-                except (ValueError, struct.error, zipfile.BadZipFile, EOFError) as error:
-                    files.append(FileResult(info.filename, error=str(error)))
-                    continue
+            except (ValueError, struct.error, zipfile.BadZipFile, EOFError, RuntimeError, NotImplementedError,
+                    zlib.error) as error:        # RuntimeError: an encrypted member; the others: broken data
+                files.append(FileResult(info.filename, error=str(error)))
+                continue
             if slices is not None:
                 files.append(FileResult(info.filename, slices))
-    return Result(files)
+    return Result(files, executable)
 
 
 def short_name(name):

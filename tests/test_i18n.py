@@ -17,6 +17,7 @@ class LocaleTests(unittest.TestCase):
         for code, strings in locales.items():
             self.assertIn('_name', strings, code)
             self.assertEqual(set(strings) - set(english), set(), code)  # no stray keys
+            self.assertEqual(set(english) - set(strings), set(), code)  # none missing: no message falls back to English
             for key, text in strings.items():
                 if not key.startswith('_'):
                     self.assertEqual(fields(text), fields(english[key]), '{} {}'.format(code, key))

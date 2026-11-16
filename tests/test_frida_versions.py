@@ -160,6 +160,30 @@ class LegacyInstallTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 frida_versions.install_legacy('12.11.18', lambda text: None, root)
 
+    def test_a_python_that_does_not_match_its_checksum_is_refused(self):
+        import hashlib
+        egg_data = io.BytesIO()
+        with zipfile.ZipFile(egg_data, 'w') as archive:
+            archive.writestr('frida/__init__.py', '')
+        egg = frida_versions.egg_name('12.11.18')
+        listing = {'urls': [{'filename': egg, 'url': 'https://example/egg',
+                             'digests': {'sha256': hashlib.sha256(egg_data.getvalue()).hexdigest()}}]}
+
+        def urlopen(url, timeout=None):
+            body = json.dumps(listing).encode() if 'pypi.org' in url else                 egg_data.getvalue() if 'example' in url else b'a Python that was tampered with'
+            return mock.MagicMock(__enter__=lambda s: io.BytesIO(body), __exit__=lambda *a: False)
+
+        root = tempfile.mkdtemp(prefix='frida-root-')
+        with mock.patch.object(frida_versions.net, 'urlopen', urlopen),                 mock.patch.object(frida_versions, 'legacy_supported', return_value=True):
+            frida_versions.prepare_install('12.11.18', root)
+            with self.assertRaisesRegex(RuntimeError, 'checksum'):
+                frida_versions.install_legacy('12.11.18', lambda text: None, root)
+
+    def test_the_ssh_password_is_not_handed_to_pip_npm_or_git(self):
+        environment = frida_versions.env('16.6.6', {'IPA_PASSWORD': 'secret', 'PATH': 'x'})
+        self.assertNotIn('IPA_PASSWORD', environment)
+        self.assertEqual(environment['PATH'], 'x')
+
 
 class SimulatorTests(unittest.TestCase):
     def test_old_coresimulator_keeps_frida_below_17_4(self):

@@ -24,6 +24,7 @@ VERSION_RE = re.compile(r'\d+\.\d+\.\d+')
 LEGACY_BELOW = 14  # frida 14 is the first with abi3 wheels; older ones ship eggs for Python 2.7 and 3.8 only
 LEGACY_PYTHON = '3.8.10'
 LEGACY_PYTHON_URL = 'https://www.python.org/ftp/python/{0}/python-{0}-embed-amd64.zip'.format(LEGACY_PYTHON)
+LEGACY_PYTHON_SHA256 = 'abbe314e9b41603dde0a823b76f5bbbe17b3de3e5ac4ef06b759da5466711271'     # of that zip
 PYPI_URL = 'https://pypi.org/pypi/frida/{}/json'
 COMPLETE = '.complete'  # written after pip succeeds, so a half-finished install is never used
 
@@ -119,6 +120,7 @@ def pick(device_version, versions):
 def env(version, base=None, root=None):
     """Environment for a child process that must import this frida version."""
     result = dict(os.environ if base is None else base)
+    result.pop('IPA_PASSWORD', None)         # pip, npm and git have no use for it
     paths = [folder(version, root)] + [p for p in result.get('PYTHONPATH', '').split(os.pathsep) if p]
     result['PYTHONPATH'] = os.pathsep.join(paths)
     return result
@@ -200,7 +202,10 @@ def install_legacy(version, log, root=None):
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         archive.extractall(path, [n for n in archive.namelist() if not n.startswith('EGG-INFO/')])
     python = os.path.join(path, 'python')
-    with zipfile.ZipFile(io.BytesIO(download(LEGACY_PYTHON_URL))) as archive:
+    interpreter = download(LEGACY_PYTHON_URL)
+    if hashlib.sha256(interpreter).hexdigest() != LEGACY_PYTHON_SHA256:
+        raise RuntimeError('the downloaded Python {} does not match its checksum'.format(LEGACY_PYTHON))
+    with zipfile.ZipFile(io.BytesIO(interpreter)) as archive:
         archive.extractall(python)
     # An embeddable Python ignores PYTHONPATH; its ._pth lists where to import from ('..' is the frida folder).
     with open(os.path.join(python, 'python38._pth'), 'w') as handle:

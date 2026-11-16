@@ -212,6 +212,9 @@ def connect(device, port):
     try:
         answer = _exchange(sock, {'MessageType': 'Connect', 'DeviceID': device.id,
                                   'PortNumber': socket.htons(port)})
+    except UsbmuxError:
+        sock.close()
+        raise
     except (OSError, plistlib.InvalidFileException, struct.error, ValueError) as error:
         sock.close()
         raise UsbmuxError('usb_err_connect', error=error)
