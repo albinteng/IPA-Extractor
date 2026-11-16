@@ -201,6 +201,7 @@ class DumpWorkerTests(unittest.TestCase):
 
     def test_a_password_that_starts_with_a_dash_is_not_taken_for_an_option(self):
         code = ('import dump_worker, runpy, sys\n'
+                'dump_worker.use_long_paths = lambda: None      # that needs scp, which this test is not about\n'
                 'runpy.run_path = lambda path, run_name: print(sys.argv[1:])\n'
                 'dump_worker.main()\n')
         environment = dict(os.environ, FRIDA_DUMP_SSH_PASSWORD='-secret')
