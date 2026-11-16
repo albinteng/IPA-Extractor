@@ -63,6 +63,12 @@ class ParserTests(unittest.TestCase):
         self.assertIsNone(args.encrypted_only)
         self.assertFalse(parse('extract', '--include-system', '--all').user_only)
 
+    def test_every_filter_can_be_switched_off_again(self):
+        # The window may have saved these: the command line needs the opposite to override them.
+        args = parse('extract', '--include-apple', '--include-decrypted', '--all')
+        self.assertIs(args.non_apple, False)
+        self.assertIs(args.encrypted_only, False)
+
     def test_a_command_is_required(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parse()
@@ -150,6 +156,20 @@ class NameAndOutputTests(unittest.TestCase):
         cli.args = parse('decrypt', 'com.a.alpha', '--skip-existing', '-o', outdir)
         self.assertEqual(cli.prepare_output('dump', jobs)[1], [])
 
+    def test_declining_the_question_is_a_cancel_not_a_usage_error(self):
+        cli = make_cli('decrypt', 'com.a.alpha', '-o', os.path.join(tempfile.mkdtemp(), 'out'))
+        jobs = cli.jobs('dump', [cli.apps['com.a.alpha']])
+        outdir, _ = cli.prepare_output('dump', jobs)
+        open(os.path.join(outdir, jobs[0][1] + '.ipa'), 'w').close()
+        asked = io.StringIO()
+        with mock.patch.object(ipa_cli, 'is_terminal', return_value=True), mock.patch('builtins.input', return_value='n'), \
+                contextlib.redirect_stderr(asked), contextlib.redirect_stdout(io.StringIO()) as out:
+            with self.assertRaises(ipa_cli.CliError) as context:
+                cli.prepare_output('dump', jobs)
+        self.assertEqual(context.exception.status, ipa_cli.EXIT_CANCELLED)
+        self.assertIn('Continue?', asked.getvalue())         # on stderr: stdout may be a --json file
+        self.assertNotIn('Continue?', out.getvalue())
+
     def test_output_folder_defaults(self):
         cli = make_cli('extract', 'com.a.alpha')
         self.assertFalse(core.DEFAULTS['separate_dirs'])                # one folder unless Settings separate them
@@ -219,6 +239,31 @@ class SettingsTests(unittest.TestCase):
             with open(self.path, encoding='utf-8') as handle:
                 self.assertEqual(json.load(handle), content)
 
+    def test_a_damaged_settings_file_is_not_overwritten(self):
+        for content in ('{broken', '[1, 2]'):
+            with open(self.path, 'w', encoding='utf-8') as handle:
+                handle.write(content)
+            with self.assertRaises(ipa_cli.CliError):
+                ipa_cli.update_settings({'theme': 'dark'})
+            with open(self.path, encoding='utf-8') as handle:
+                self.assertEqual(handle.read(), content)
+
+    def test_the_window_reads_a_damaged_file_as_the_defaults(self):
+        for content in ('{broken', '[1, 2]'):
+            with open(self.path, 'w', encoding='utf-8') as handle:
+                handle.write(content)
+            self.assertEqual(core.load_config(), {})
+
+    def test_values_of_the_wrong_type_are_left_out(self):
+        with open(self.path, 'w', encoding='utf-8') as handle:
+            json.dump({'lang': [], 'port': 'x', 'user_only': 1, 'font_size': True, 'theme': 'dark', 'password': 'p',
+                       'from_a_newer_version': [1]}, handle)
+        self.assertEqual(core.load_config(), {'theme': 'dark', 'password': 'p', 'from_a_newer_version': [1]})
+
+    def test_saving_leaves_no_half_written_file_behind(self):
+        core.save_config({'theme': 'dark'})
+        self.assertEqual(os.listdir(os.path.dirname(self.path)), ['settings.json'])
+
     def test_config_command(self):
         for argv in (('config', 'set', 'theme', 'black'), ('config', 'set', 'theme', 'pink')):
             cli = ipa_cli.Cli(parse(*argv))
@@ -232,6 +277,31 @@ class SettingsTests(unittest.TestCase):
         shown = json.loads(out.getvalue())
         self.assertEqual(shown['theme'], 'black')
         self.assertNotIn('password', shown)
+
+
+class CommandErrorTests(unittest.TestCase):
+    def test_an_error_has_the_status_it_was_given(self):
+        self.assertEqual(ipa_cli.CliError('x').status, ipa_cli.EXIT_USAGE)
+        self.assertEqual(ipa_cli.CliError('x', ipa_cli.EXIT_FAILED).status, ipa_cli.EXIT_FAILED)
+
+    def test_main_returns_that_status(self):
+        def fail(cli):
+            raise ipa_cli.CliError('installing failed', ipa_cli.EXIT_FAILED)
+
+        with mock.patch.object(ipa_cli, 'build_parser') as build, contextlib.redirect_stderr(io.StringIO()):
+            build.return_value.parse_args.return_value = mock.Mock(settings=None, command='verify', run=fail)
+            self.assertEqual(ipa_cli.main(), ipa_cli.EXIT_FAILED)
+
+    def test_a_program_without_a_console_has_no_terminal(self):
+        self.assertFalse(ipa_cli.is_terminal(None))          # sys.stdin of a window program started by double click
+        stream = mock.Mock()
+        stream.isatty.return_value = True
+        self.assertTrue(ipa_cli.is_terminal(stream))
+
+    def test_a_frida_version_must_be_a_full_version(self):
+        for bad in ('16.6', '16', '..', '16.6.6/../x'):
+            with self.assertRaises(ipa_cli.CliError):
+                ipa_cli.cmd_install_frida(ipa_cli.Cli(parse('install-frida', '--version', bad)))
 
 
 class OutputTests(unittest.TestCase):
@@ -344,6 +414,21 @@ class EngineTests(unittest.TestCase):
                 device.return_value.ios_version.return_value = ios
                 cli.run_decrypt([cli.apps['com.a.alpha']])
             cli._dump_worker.assert_called_once()
+
+    def test_a_relative_frida_ios_dump_folder_still_reaches_the_worker(self):
+        # The worker runs inside the output folder: a relative path would then point somewhere else.
+        cli = make_cli('decrypt', 'com.a.alpha')
+        seen = {}
+
+        def popen(command, **kwargs):
+            seen.update(kwargs)
+            raise OSError('stop here')
+
+        options = dict(frida_version='17.24.3', frida='127.0.0.1:1', host='h', port='22', user='u', password='p',
+                       outdir='out', dump_dir=os.path.join('relative', 'frida-ios-dump'))
+        with mock.patch.object(core.subprocess, 'Popen', popen), mock.patch.object(cli, '_close_running_app'):
+            cli._dump_one(0, 1, 'com.a.alpha', 'Alpha', options)
+        self.assertEqual(seen['env']['FRIDA_IOS_DUMP_DIR'], os.path.abspath(options['dump_dir']))
 
     def test_extract_runs_the_engine_on_the_calling_thread(self):
         cli = make_cli('extract', 'com.a.alpha')

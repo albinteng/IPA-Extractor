@@ -402,6 +402,30 @@ class WindowTests(unittest.TestCase):
         self.assertIn('x cannot be read', warning.call_args[0][1])
         prepare.assert_not_called()
 
+    def test_a_connection_lost_while_the_overwrite_question_is_open_leaves_the_window_usable(self):
+        gui = self.gui
+
+        def question_answered(mode, jobs, names=None):
+            gui.dumping = True                 # what _prepare_batch does once the question is answered
+            gui.endpoint = None                # ... and the connection went away while it was open
+            return '/tmp/out'
+
+        gui.var_dump_method.set(engine.METHOD_NATIVE)
+        gui.var_native_helper.set('memory')
+        gui.device_os = 'iOS 17.0'
+        gui.ssh = object()
+        gui.endpoint = None
+        gui.apps = {'a.b': {'bundle': 'a.b', 'name': 'name', 'version': '1', 'build': '1'}}
+        gui._checked_in_order = lambda: ['a.b']
+        gui._jobs = lambda *args: [('a.b', 'name')]
+        gui._prepare_batch = question_answered
+        gui.run_background = mock.Mock()
+        with mock.patch.object(messagebox, 'showinfo') as info:
+            gui.start_dump()
+        self.assertFalse(gui.dumping)                  # it stayed True for good, and every button with it
+        info.assert_called_once()
+        gui.run_background.assert_not_called()
+
     def test_a_helper_that_fails_on_the_device_warns_once_per_batch(self):
         gui = self.gui
         gui.helper_warned = False

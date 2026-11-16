@@ -103,6 +103,7 @@ class Device:
         if self.user != 'root':
             stdin.write(self.password + '\n')
             stdin.flush()
+            stdin.channel.shutdown_write()      # a wrong password must end sudo, not make it wait for another try
         # Both streams are read at once: a helper that logs a lot to stderr would otherwise block on a full window.
         errors = []
         reader = threading.Thread(target=lambda: errors.append(stderr.read()), daemon=True)

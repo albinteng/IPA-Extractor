@@ -182,8 +182,11 @@ def inspect_macho(f):
         offset += size
     if signature:
         f.seek(base + signature[0])
-        identifier, team_id, signer = parse_code_signature(f.read(signature[1]))
-        result.update(identifier=identifier, team_id=team_id, signer=signer)
+        try:
+            identifier, team_id, signer = parse_code_signature(f.read(signature[1]))
+            result.update(identifier=identifier, team_id=team_id, signer=signer)
+        except (ValueError, IndexError, struct.error):
+            pass        # an unreadable signature must not hide what was read: the encryption and the architectures
     return result
 
 

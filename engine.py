@@ -169,12 +169,32 @@ def pip_install(packages):
     return [sys.executable, '-m', 'pip', 'install', '--upgrade'] + user + packages
 
 
-def load_config():
+def load_config(strict=False):
+    """The settings file as a dict. A file that cannot be read gives {}, or with strict raises ValueError.
+
+    Values of the wrong type (a hand-edited "lang": []) are left out, so they cannot crash the callers.
+    """
     try:
         with open(CONFIG_PATH, encoding='utf-8') as handle:
-            return json.load(handle)
-    except (OSError, ValueError):
+            data = json.load(handle)
+    except FileNotFoundError:
         return {}
+    except (OSError, ValueError) as error:
+        if strict:
+            raise ValueError('{}: {}'.format(CONFIG_PATH, error))
+        return {}
+    if not isinstance(data, dict):
+        if strict:
+            raise ValueError('{}: the top level is not an object'.format(CONFIG_PATH))
+        return {}
+
+    def fits(key, value):
+        default = DEFAULTS.get(key, value if key == 'password' else None)
+        if default is None:
+            return True                                   # a key of a newer version: kept as it is
+        return isinstance(value, type(default)) and isinstance(value, bool) == isinstance(default, bool)
+
+    return {key: value for key, value in data.items() if fits(key, value)}
 
 
 def save_config(data):
@@ -186,8 +206,10 @@ def save_config(data):
             pass
         return
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)     # on macOS the folder is made by the first save
-    with open(CONFIG_PATH, 'w', encoding='utf-8') as handle:
+    temporary = CONFIG_PATH + '.tmp'          # written whole first: a crash leaves the old file, not half of a new one
+    with open(temporary, 'w', encoding='utf-8') as handle:
         json.dump(data, handle, ensure_ascii=False, indent=2)
+    os.replace(temporary, CONFIG_PATH)
 
 
 class SSHTunnel:
@@ -1055,7 +1077,8 @@ class DumpEngine:
             bundle, '-R', options['frida'], '--ssh-transport', 'tcp', '-H', options['host'], '-p', options['port'],
             '-u', options['user'], '-o', name, '-v']
         env = dict(frida_versions.env(options['frida_version']), FRIDA_DUMP_SSH_PASSWORD=options['password'],
-                   PYTHONIOENCODING='utf-8', FRIDA_IOS_DUMP_DIR=options['dump_dir'])
+                   PYTHONIOENCODING='utf-8',
+                   FRIDA_IOS_DUMP_DIR=os.path.abspath(options['dump_dir']))     # the worker runs in the output folder
         try:
             process = subprocess.Popen(command, cwd=options['outdir'], env=env, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

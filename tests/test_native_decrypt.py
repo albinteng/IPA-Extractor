@@ -298,6 +298,7 @@ class DeviceTests(unittest.TestCase):
         ssh.exec_command.return_value = (stdin, stdout, stderr)
         native_decrypt.Device(ssh, 'mobile', 'secret').run('true')
         stdin.write.assert_called_once_with('secret\n')
+        stdin.channel.shutdown_write.assert_called_once_with()      # a wrong password must not leave sudo waiting
 
 
 if __name__ == '__main__':

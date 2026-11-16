@@ -14,6 +14,7 @@ import shlex
 import shutil
 import stat
 import tarfile
+import threading
 import time
 import zipfile
 
@@ -90,6 +91,9 @@ def extract_ipa(client, app_path, dest, progress=None, cancelled=None, metadata=
     part = dest + '.part'
     _, stdout, stderr = client.exec_command(remote.sh('tar -C {} -cf - {}'.format(q(container), ' '.join(q(n) for n in names))))
     stdout.channel.settimeout(120)
+    errors = []         # read as it comes: warnings that fill the window would block tar until the timeout
+    drain = threading.Thread(target=lambda: errors.append(stderr.read()), daemon=True)
+    drain.start()
     reader = _CountingReader(stdout, lambda done: progress(min(done, total), total), cancelled)
     try:
         with zipfile.ZipFile(part, 'w', allowZip64=True) as ipa, tarfile.open(fileobj=reader, mode='r|') as tar:
@@ -110,7 +114,9 @@ def extract_ipa(client, app_path, dest, progress=None, cancelled=None, metadata=
                     raise RuntimeError('unsupported entry in app bundle: {}'.format(member.name))
         status = stdout.channel.recv_exit_status()
         if status != 0:
-            raise RuntimeError('tar exited with {}: {}'.format(status, stderr.read().decode('utf-8', 'replace').strip()))
+            drain.join(5)
+            raise RuntimeError('tar exited with {}: {}'.format(
+                status, (errors[0] if errors else b'').decode('utf-8', 'replace').strip()))
         os.replace(part, dest)
     except BaseException:
         stdout.channel.close()

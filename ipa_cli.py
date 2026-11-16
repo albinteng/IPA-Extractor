@@ -46,7 +46,16 @@ STATUS_INTERVAL = 5   # seconds between two progress lines of one app
 
 
 class CliError(Exception):
-    """Something the user can fix; the message is printed and the exit status is EXIT_USAGE."""
+    """Something the user can fix; the message is printed and the exit status is `status` (usage by default)."""
+
+    def __init__(self, message, status=EXIT_USAGE):
+        super().__init__(message)
+        self.status = status
+
+
+def is_terminal(stream):
+    """isatty() of a stream that may not exist (a Windows program started without any console has no stdin)."""
+    return stream is not None and stream.isatty()
 
 
 def yes_no(value):
@@ -134,7 +143,7 @@ class Cli(core.DumpEngine):
         self.say('warning: ' + self.t('m_helper', error=error).split('\n\n')[0] + ' ' + error)
 
     def cancel(self):
-        """Stop the batch after the file in progress: the first Ctrl-C asks, the second one kills."""
+        """Stop the batch (the file in progress is dropped): the first Ctrl-C asks, the second one kills."""
         if self.cancel_requested.is_set() or not self.working:
             raise KeyboardInterrupt     # a prompt, the connection or an install: nothing to finish first
         self.cancel_requested.set()
@@ -174,7 +183,7 @@ class Cli(core.DumpEngine):
         if password is None and c.get('password') not in (None, ''):
             password = c['password']
         if password is None:
-            if not sys.stdin.isatty():
+            if not is_terminal(sys.stdin):
                 raise CliError('no SSH password: use --password, the IPA_PASSWORD variable, or run in a terminal')
             password = getpass.getpass('SSH password for {}@{}: '.format(user, host or 'USB'))
         return host, port, user, password
@@ -362,12 +371,13 @@ class Cli(core.DumpEngine):
             existing += present
             remaining.append((bundle, name))
         if existing and not args.overwrite:
-            if not (sys.stdin.isatty() and sys.stderr.isatty()):
+            if not (is_terminal(sys.stdin) and is_terminal(sys.stderr)):
                 raise CliError('these files exist (use --overwrite to replace them, --skip-existing to leave '
                                'those apps out):\n  ' + '\n  '.join(existing[:15]))
             self.say('These files will be replaced:\n  ' + '\n  '.join(existing[:15]))
-            if input('Continue? [y/N] ').strip().lower() not in ('y', 'yes'):
-                raise CliError('cancelled')
+            print('Continue? [y/N] ', end='', file=sys.stderr, flush=True)       # stdout may be a --json file
+            if input().strip().lower() not in ('y', 'yes'):
+                raise CliError('cancelled', EXIT_CANCELLED)
         return outdir, remaining
 
     def run_extract(self, apps):
@@ -411,10 +421,10 @@ class Cli(core.DumpEngine):
                                                                + device_version))
             dump_dir = None if direct else (args.dump_dir or c['dump_dir'])
             if not self.install_frida(device_version, dump_dir):
-                raise CliError('installing frida {} failed'.format(device_version))
+                raise CliError('installing frida {} failed'.format(device_version), EXIT_FAILED)
             version = frida_versions.pick(device_version, frida_versions.installed())
             if version is None:
-                raise CliError('frida {} was installed but cannot be used'.format(device_version))
+                raise CliError('frida {} was installed but cannot be used'.format(device_version), EXIT_FAILED)
         if version != device_version:
             self.log(core.version_note(version, device_version))
         tunnel = None
@@ -609,6 +619,8 @@ def cmd_verify(cli):
 def cmd_install_frida(cli):
     args = cli.args
     version = args.version
+    if version and not frida_versions.VERSION_RE.fullmatch(version):
+        raise CliError('--version must be a full version like 16.6.6, not {!r}'.format(version))
     if args.list:
         for installed in frida_versions.installed():
             print(installed)
@@ -639,7 +651,7 @@ def cmd_install_frida_ios_dump(cli):
     try:
         core.download_frida_ios_dump(target, lambda line: cli.say('  ' + line))
     except Exception as error:
-        raise CliError(cli.render(Text('log_download_failed', error=error)))
+        raise CliError(cli.render(Text('log_download_failed', error=error)), EXIT_FAILED)
     cli.log(Text('log_download_done'))
     if cli.args.save:
         update_settings(dict(dump_dir=target))
@@ -688,7 +700,10 @@ def convert_setting(key, text):
 
 def update_settings(changes, reset=()):
     """Write changes into the settings file the window uses. Keys that equal the default are not kept, like the window."""
-    data = core.load_config()
+    try:
+        data = core.load_config(strict=True)       # a file that cannot be read is not overwritten with one key
+    except ValueError as error:
+        raise CliError('the settings file is damaged, fix or delete it first: {}'.format(error))
     for key in reset:
         data.pop(key, None)
     for key, value in changes.items():
@@ -772,8 +787,11 @@ def build_parser():
         g = p.add_argument_group('which apps count (defaults come from the settings)')
         g.add_argument('--user-only', dest='user_only', action='store_true', default=None, help='only apps installed by the user')
         g.add_argument('--include-system', dest='user_only', action='store_false', help='also system apps')
-        g.add_argument('--non-apple', action='store_true', default=None, help='leave Apple apps out')
-        g.add_argument('--encrypted-only', action='store_true', default=None, help='only apps that are FairPlay-encrypted')
+        g.add_argument('--non-apple', dest='non_apple', action='store_true', default=None, help='leave Apple apps out')
+        g.add_argument('--include-apple', dest='non_apple', action='store_false', help='also Apple apps')
+        g.add_argument('--encrypted-only', dest='encrypted_only', action='store_true', default=None,
+                       help='only apps that are FairPlay-encrypted')
+        g.add_argument('--include-decrypted', dest='encrypted_only', action='store_false', help='also apps that are not encrypted')
         g.add_argument('--search', metavar='TEXT', help='apps whose name or bundle ID contains TEXT')
 
     p = sub.add_parser('apps', help='list the apps on the device')
@@ -868,7 +886,7 @@ def main(argv=None):
         return args.run(cli)
     except CliError as error:
         print('error: {}'.format(error), file=sys.stderr)
-        return EXIT_USAGE
+        return error.status
     except KeyboardInterrupt:
         print('interrupted', file=sys.stderr)
         return EXIT_CANCELLED

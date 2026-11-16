@@ -15,7 +15,6 @@ if __name__ == '__main__' and len(sys.argv) > 1:
     import ipa_cli
     sys.exit(ipa_cli.main())
 
-import json
 import os
 import queue
 import re
@@ -1818,15 +1817,23 @@ class DumpGUI(DumpEngine, tk.Tk):
             return
         self.log(Text('log_start_native' if native else 'log_start_direct' if direct else 'log_start', n=len(jobs)))
         helper = native_decrypt.choose(self.var_native_helper.get(), ios_major(self.device_os)) if native else None
-        options = dict(direct=direct, native=helper, method=helper or decrypt_method(self.device_os),
-                       host=self.endpoint[0], port=str(self.endpoint[1]),
-                       user=self.var_user.get().strip(), password=self.var_password.get(),
-                       frida='127.0.0.1:{}'.format(self.tunnel.local_port) if self.tunnel else None,
-                       frida_version=self.frida_version,
-                       outdir=outdir,
-                       dump_dir=dump_dir, close_after=self.var_close_after.get(),
-                       restart_frida=self.var_restart_frida.get(), generation=self.generation, names=names,
-                       repair=direct or self.var_repair.get(), ios=self.device_os or '')
+        try:
+            # The overwrite question may have stayed open while the connection dropped: nothing is left to read here.
+            options = dict(direct=direct, native=helper, method=helper or decrypt_method(self.device_os),
+                           host=self.endpoint[0], port=str(self.endpoint[1]),
+                           user=self.var_user.get().strip(), password=self.var_password.get(),
+                           frida='127.0.0.1:{}'.format(self.tunnel.local_port) if self.tunnel else None,
+                           frida_version=self.frida_version,
+                           outdir=outdir,
+                           dump_dir=dump_dir, close_after=self.var_close_after.get(),
+                           restart_frida=self.var_restart_frida.get(), generation=self.generation, names=names,
+                           repair=direct or self.var_repair.get(), ios=self.device_os or '')
+        except (TypeError, AttributeError):
+            self.dumping = False        # _prepare_batch had set it: the buttons would stay locked
+            self.btn_cancel.configure(state='disabled')
+            self._checks_changed()
+            messagebox.showinfo(self.t('m_not_connected_t'), self.t('m_not_connected'))
+            return
         self.run_background(self._dump_worker, jobs, options)
 
     def start_extract(self):
@@ -1911,11 +1918,24 @@ class DumpGUI(DumpEngine, tk.Tk):
             return
         parent = os.path.normpath(parent)
         # An empty folder is used as is; otherwise it gets a frida-ios-dump subfolder.
-        target = parent if not os.listdir(parent) else os.path.join(parent, 'frida-ios-dump')
+        try:
+            empty = not os.listdir(parent)
+        except OSError as error:         # a folder that may not be read (the picker lets one choose it)
+            messagebox.showerror(self.t('m_download_t'), str(error))
+            return
+        target = parent if empty else os.path.join(parent, 'frida-ios-dump')
         self.offer_download(target, 'm_download_to')
 
+    @staticmethod
+    def folder_readable_empty(path):
+        """Whether the folder can be listed and has nothing in it."""
+        try:
+            return not os.listdir(path)
+        except OSError:
+            return False
+
     def offer_download(self, dump_dir, question='m_download'):
-        if os.path.isdir(dump_dir) and os.listdir(dump_dir):
+        if os.path.isdir(dump_dir) and not self.folder_readable_empty(dump_dir):
             messagebox.showerror(self.t('m_download_t'), self.t('m_dump_dir_busy', path=dump_dir))
             self.open_settings(tab=2)
             return

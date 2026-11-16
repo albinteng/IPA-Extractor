@@ -194,7 +194,7 @@ python ipa_cli.py config show                           the settings; config set
 
 | Command | What it does |
 | --- | --- |
-| `apps` | Lists the apps with name, bundle ID, version, encryption, team, signer, developer. Filters as in the window: `--include-system`, `--non-apple`, `--encrypted-only`, `--search TEXT` (defaults from the settings) |
+| `apps` | Lists the apps with name, bundle ID, version, encryption, team, signer, developer. Filters as in the window: `--user-only` / `--include-system`, `--non-apple` / `--include-apple`, `--encrypted-only` / `--include-decrypted`, `--search TEXT` (defaults from the settings; each pair overrides the window's choice either way) |
 | `extract`, `decrypt` | Original or decrypted IPAs. Pick apps by bundle ID, `--all`, `--search`, `--unextracted` (no IPA in the output folders yet) or `--partial` (decrypted IPA still partly encrypted). `-o DIR`, `--name TEMPLATE`, `--overwrite`, `--skip-existing`, `--json` |
 | `decrypt` options | `--mode native` / `frida-direct` / `frida-ios-dump`, `--helper auto` / `mremap` / `memory`, `--frida-port`, `--dump-dir`, `--install-frida`, `--repair` / `--no-repair`, `--close-after` / `--keep-open`, `--restart-frida` / `--no-restart-frida` (all default to the settings); `--helper mremap` is refused on iOS 16 and later |
 | `verify` | Checks every executable of IPAs, like `ipa_verify.py` |
@@ -202,7 +202,7 @@ python ipa_cli.py config show                           the settings; config set
 | `install-frida`, `install-frida-ios-dump` | What the window's *Install Frida dependencies* and *Install frida-ios-dump* buttons do |
 | `config` | `show`, `set KEY VALUE`, `reset KEY...`, `keys`, `path`: the same settings as the window, including the theme |
 
-The SSH password comes from `--password`, the `IPA_PASSWORD` variable, the saved one (*Remember password*), or a prompt. Progress goes to stderr, results to stdout. Files that exist are replaced only with `--overwrite` (or after asking in a terminal). Ctrl+C finishes the file in progress and stops; a second Ctrl+C quits at once. Exit status: 0 everything done, 1 something failed, 2 wrong usage or no connection, 3 done but some IPAs are partly encrypted, 130 cancelled. The messages of the extraction itself follow the language setting (`--lang` overrides it); the command line's own messages and help are English.
+The SSH password comes from `--password`, the `IPA_PASSWORD` variable, the saved one (*Remember password*), or a prompt. Progress goes to stderr, results to stdout. Files that exist are replaced only with `--overwrite` (or after asking in a terminal). Ctrl+C stops the batch (the file in progress is dropped, finished ones stay); a second Ctrl+C quits at once. Exit status: 0 everything done, 1 something failed, 2 wrong usage or no connection, 3 done but some IPAs are partly encrypted, 130 cancelled. The messages of the extraction itself follow the language setting (`--lang` overrides it); the command line's own messages and help are English.
 
 ## Limitations
 

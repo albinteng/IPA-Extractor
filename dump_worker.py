@@ -122,7 +122,7 @@ def main():
     argv = sys.argv[1:]
     password = os.environ.pop('FRIDA_DUMP_SSH_PASSWORD', None)
     if password is not None:
-        argv += ['-P', password]
+        argv += ['-P' + password]      # joined: a password that starts with '-' would be taken for an option
     sys.argv = [DUMP_PY] + argv
     runpy.run_path(DUMP_PY, run_name='__main__')
 

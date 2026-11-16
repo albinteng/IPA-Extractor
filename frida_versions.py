@@ -14,7 +14,6 @@ import platform
 import re
 import shutil
 import sys
-import tempfile
 import zipfile
 
 import app_paths
@@ -195,7 +194,10 @@ def install_legacy(version, log, root=None):
     egg = next((f for f in files if f['filename'] == egg_name(version)), None)
     if egg is None:
         raise RuntimeError('no {} on PyPI'.format(egg_name(version)))
-    with zipfile.ZipFile(io.BytesIO(download(egg['url']))) as archive:
+    data = download(egg['url'])
+    if hashlib.sha256(data).hexdigest() != egg.get('digests', {}).get('sha256'):
+        raise RuntimeError('the downloaded {} does not match its checksum'.format(egg['filename']))
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
         archive.extractall(path, [n for n in archive.namelist() if not n.startswith('EGG-INFO/')])
     python = os.path.join(path, 'python')
     with zipfile.ZipFile(io.BytesIO(download(LEGACY_PYTHON_URL))) as archive:
@@ -267,8 +269,19 @@ def finish_install(version, root=None):
     path, target = staging(version, root), folder(version, root)
     with open(os.path.join(path, COMPLETE), 'w'):
         pass
-    remove(version, root)
-    os.replace(path, target)
+    # The old copy is moved aside first: when a running process holds its files nothing is lost (a half-deleted
+    # folder would leave neither version usable), and the error says so before anything changed.
+    aside = target + '.old'
+    shutil.rmtree(aside, ignore_errors=True)
+    if os.path.isdir(target):
+        os.replace(target, aside)
+    try:
+        os.replace(path, target)
+    except OSError:
+        if os.path.isdir(aside) and not os.path.isdir(target):
+            os.replace(aside, target)
+        raise
+    shutil.rmtree(aside, ignore_errors=True)
 
 
 def remove(version, root=None):

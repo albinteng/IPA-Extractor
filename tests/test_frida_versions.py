@@ -50,6 +50,23 @@ class FridaVersionTests(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(os.path.join(root, '17.24.3'))), [frida_versions.COMPLETE, 'new'])
             self.assertFalse(os.path.exists(frida_versions.staging('17.24.3', root)))
 
+    def test_an_install_that_cannot_replace_the_old_copy_leaves_it_whole(self):
+        import frida_versions
+        with tempfile.TemporaryDirectory() as root:
+            frida_versions.prepare_install('17.24.3', root)
+            os.makedirs(os.path.join(root, '17.24.3'))
+            open(os.path.join(root, '17.24.3', frida_versions.COMPLETE), 'w').close()
+            real = os.replace
+
+            def replace(source, target):
+                if source == frida_versions.staging('17.24.3', root):
+                    raise PermissionError('in use')            # the new copy cannot be moved into place
+                return real(source, target)
+
+            with mock.patch.object(frida_versions.os, 'replace', replace), self.assertRaises(PermissionError):
+                frida_versions.finish_install('17.24.3', root)
+            self.assertEqual(frida_versions.installed(root), ['17.24.3'])      # the old one still works
+
     def test_env_puts_version_folder_first(self):
         import frida_versions
         env = frida_versions.env('17.24.3', {'PYTHONPATH': 'elsewhere'}, root='versions')
@@ -125,6 +142,23 @@ class WheelTests(unittest.TestCase):
             frida_versions.prepare_install('16.5.9', root)
             with self.assertRaises(RuntimeError):
                 frida_versions.install_wheel('16.5.9', lambda text: None, root)
+
+
+class LegacyInstallTests(unittest.TestCase):
+    def test_an_egg_that_does_not_match_its_checksum_is_refused(self):
+        egg = frida_versions.egg_name('12.11.18')
+        listing = {'urls': [{'filename': egg, 'url': 'https://example/egg', 'digests': {'sha256': '0' * 64}}]}
+
+        def urlopen(url, timeout=None):
+            body = json.dumps(listing).encode() if 'pypi.org' in url else b'not what was published'
+            return mock.MagicMock(__enter__=lambda s: io.BytesIO(body), __exit__=lambda *a: False)
+
+        root = tempfile.mkdtemp(prefix='frida-root-')
+        with mock.patch.object(frida_versions.net, 'urlopen', urlopen), \
+                mock.patch.object(frida_versions, 'legacy_supported', return_value=True):
+            frida_versions.prepare_install('12.11.18', root)
+            with self.assertRaises(RuntimeError):
+                frida_versions.install_legacy('12.11.18', lambda text: None, root)
 
 
 class SimulatorTests(unittest.TestCase):

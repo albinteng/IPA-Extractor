@@ -4,6 +4,7 @@
 import io
 import struct
 import unittest
+from unittest import mock
 
 import app_info
 from tests.support import code_directory, macho, superblob
@@ -16,6 +17,12 @@ class AppInfoTests(unittest.TestCase):
         self.assertEqual(info['encrypted'], True)
         self.assertEqual(info['identifier'], 'com.example.app')
         self.assertEqual(info['team_id'], 'ABCDE12345')
+
+    def test_an_unreadable_signature_keeps_what_was_read(self):
+        with mock.patch.object(app_info, 'parse_code_signature', side_effect=ValueError('bad')):
+            result = app_info.inspect_macho(io.BytesIO(macho(1, b'whatever')))
+        self.assertTrue(result['encrypted'])
+        self.assertEqual((result['archs'], result['identifier']), (['arm64'], ''))
 
     def test_selects_arm64_slice_of_fat_binary(self):
         thin = macho(0, superblob(code_directory('com.example.app', 'TEAM')))

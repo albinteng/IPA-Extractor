@@ -184,7 +184,7 @@ class ErrorClassificationTests(unittest.TestCase):
             self.assertEqual(engine.classify_error(message), kind, message)
 
 
-class WorkerTests(unittest.TestCase):
+class DumpWorkerTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == 'win32', 'Windows only')
     @unittest.skipUnless(importlib.util.find_spec('scp'), 'scp is installed by Install Frida dependencies')
     def test_long_paths_keep_scp_directory_target(self):
@@ -198,6 +198,15 @@ class WorkerTests(unittest.TestCase):
         output = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True,
                                 text=True, check=True).stdout
         self.assertEqual(output.split(), ['True', 'True'])
+
+    def test_a_password_that_starts_with_a_dash_is_not_taken_for_an_option(self):
+        code = ('import dump_worker, runpy, sys\n'
+                'runpy.run_path = lambda path, run_name: print(sys.argv[1:])\n'
+                'dump_worker.main()\n')
+        environment = dict(os.environ, FRIDA_DUMP_SSH_PASSWORD='-secret')
+        output = subprocess.run([sys.executable, '-c', code, '-H', 'host'], cwd=ROOT, env=environment,
+                                capture_output=True, text=True, check=True).stdout
+        self.assertEqual(output.strip(), "['-H', 'host', '-P-secret']")      # joined to its option
 
     def test_reports_progress_as_json_lines(self):
         code = ('import dump_worker, sys, types\n'

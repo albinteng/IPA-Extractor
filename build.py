@@ -33,6 +33,9 @@ def command(output):
             '--include-data-dir=locales=locales', '--include-data-dir=helpers/bin=helpers/bin',
             '--include-data-dir=assets=assets', '--include-data-files=device_models.json=device_models.json',
             '--include-data-files=repair_agent.js=repair_agent.js', '--nofollow-import-to=frida,frida_tools']
+    # An old frida (12, 13) runs with a Python 3.8 of its own, which cannot start the compiled program in worker
+    # mode: it runs these two scripts as files. Only the standard library is imported by them.
+    args += ['--include-data-files={0}={0}'.format(name) for name in ('frida_probe.py', 'repair_worker.py')]
     args += ['--include-module=' + name for name in DUMP_PY_IMPORTS]
     if sys.platform == 'win32':
         # attach: the command line prints into the console it was started from; started by a double click, no console.
