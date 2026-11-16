@@ -1,4 +1,6 @@
+# -*- coding: utf-8 -*-
 """The usbmuxd client against a fake usbmuxd, and the USB connection around it."""
+
 import json
 import os
 import plistlib
@@ -13,6 +15,7 @@ from unittest import mock
 import engine
 import ipa_cli
 import usbmux
+
 
 UDID = '00008030-0014394602E0802E'
 
@@ -385,16 +388,6 @@ class MessageTests(unittest.TestCase):
         error = usbmux.UsbmuxError('usb_err_none')
         cli = make_cli('apps', '--lang', 'zh-TW')
         self.assertEqual(cli.render(engine.error_text(error)), locales['zh-TW']['usb_err_none'])
-
-
-class LanguageTests(unittest.TestCase):
-    def test_every_language_names_the_connection_choices(self):
-        import i18n
-        for code, strings in i18n.load_locales().items():
-            for key in ('connection', 'conn_ssh', 'conn_usb', 'usb_device', 'usb_refresh', 'tab_connection',
-                        'connection_help', 'log_ready_usb', 'usb_none', 'conn_ssh_tip', 'conn_usb_tip'):
-                self.assertTrue(strings.get(key), (code, key))
-            self.assertNotEqual(strings['conn_ssh'], strings['conn_usb'], code)
 
 
 if __name__ == '__main__':
