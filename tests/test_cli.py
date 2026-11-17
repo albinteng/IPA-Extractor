@@ -182,11 +182,14 @@ class NameAndOutputTests(unittest.TestCase):
 
 class ConnectionTests(unittest.TestCase):
     def test_options_beat_the_settings_and_the_environment_beats_a_saved_password(self):
-        cli = make_cli('apps', '-H', '1.2.3.4', settings=dict(host='9.9.9.9', user='root', port=2222, password='saved'))
+        saved = dict(host='9.9.9.9', user='root', port=2222, password='saved')
         with mock.patch.dict(os.environ, {'IPA_PASSWORD': 'env'}):
-            self.assertEqual(cli.connection(), ('1.2.3.4', 2222, 'root', 'env'))
+            cli = make_cli('apps', '-H', '1.2.3.4', settings=saved)
+            self.assertNotIn('IPA_PASSWORD', os.environ)             # gone for every command, connected or not
+        self.assertEqual(cli.connection(), ('1.2.3.4', 2222, 'root', 'env'))
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop('IPA_PASSWORD', None)
+            cli = make_cli('apps', '-H', '1.2.3.4', settings=saved)
             self.assertEqual(cli.connection()[3], 'saved')
             cli.args = parse('apps', '-p', 'given', '-H', 'h', '-u', 'u')
             self.assertEqual(cli.connection(), ('h', 2222, 'u', 'given'))
@@ -259,6 +262,13 @@ class SettingsTests(unittest.TestCase):
             json.dump({'lang': [], 'port': 'x', 'user_only': 1, 'font_size': True, 'theme': 'dark', 'password': 'p',
                        'from_a_newer_version': [1]}, handle)
         self.assertEqual(core.load_config(), {'theme': 'dark', 'password': 'p', 'from_a_newer_version': [1]})
+
+    def test_setting_a_key_keeps_a_hand_edited_value_of_the_wrong_type(self):
+        with open(self.path, 'w', encoding='utf-8') as handle:
+            json.dump({'port': '2222'}, handle)
+        ipa_cli.update_settings({'theme': 'dark'})
+        with open(self.path, encoding='utf-8') as handle:
+            self.assertEqual(json.load(handle), {'port': '2222', 'theme': 'dark'})
 
     def test_saving_leaves_no_half_written_file_behind(self):
         core.save_config({'theme': 'dark'})

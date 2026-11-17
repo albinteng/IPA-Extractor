@@ -72,15 +72,21 @@ class Cli(core.DumpEngine):
 
     def __init__(self, args):
         self.args = args
+        # Taken out of the environment for every command, so that pip, npm, git and the workers never inherit it.
+        self.env_password = os.environ.pop('IPA_PASSWORD', None)
         self.settings = dict(core.DEFAULTS)
         self.settings.update(core.load_config())
         self.locales = i18n.load_locales()
-        self.lang = i18n.resolve(self.locales, getattr(args, 'lang', None) or self.settings['lang'])
+        asked = getattr(args, 'lang', None)
+        if asked and asked != i18n.AUTO and asked not in self.locales:
+            print('warning: no language {!r} (the choices: {}); using the default'.format(
+                asked, ', '.join(sorted(self.locales))), file=sys.stderr)
+        self.lang = i18n.resolve(self.locales, asked or self.settings['lang'])
         self.quiet = getattr(args, 'quiet', False)
         self.ssh = self.tunnel = self.frida_version = self.device_os = None
         self.usb_tunnel = None     # the USB connection's local end, when the device is reached by cable
         self.host, self.port, self.user, self.password = '', 22, '', ''
-        self.working = False       # a batch is running: only then does Ctrl-C mean "finish this file and stop"
+        self.working = False       # a batch is running: only then does Ctrl-C mean "drop the file in progress and stop"
         self.generation = 0
         self.cancel_requested = threading.Event()
         self.current_process = None
@@ -179,7 +185,7 @@ class Cli(core.DumpEngine):
             raise CliError('no SSH account: use --user (root, or mobile on rootless jailbreaks)')
         password = args.password
         if password is None:
-            password = os.environ.get('IPA_PASSWORD')
+            password = self.env_password
         if password is None and c.get('password') not in (None, ''):
             password = c['password']
         if password is None:
@@ -301,9 +307,11 @@ class Cli(core.DumpEngine):
         if flagged:
             shown = self.visible()
             try:
-                if args.unextracted:
+                if args.unextracted and args.partial:      # both: what still needs work, either way
+                    shown = [app for app in shown if self.is_unextracted(app) or self.is_partial(app)]
+                elif args.unextracted:
                     shown = [app for app in shown if self.is_unextracted(app)]
-                if args.partial:
+                elif args.partial:
                     shown = [app for app in shown if self.is_partial(app)]
             except app_info.NameTemplateError as error:
                 raise CliError('the file name template cannot be used: ' + self.name_error(error))
@@ -451,7 +459,10 @@ class Cli(core.DumpEngine):
         method = MODES[args.mode] if args.mode else core.dump_method_setting(c['dump_method'])
         direct = method in (core.METHOD_FRIDA_DIRECT, core.METHOD_NATIVE)
         native = method == core.METHOD_NATIVE
-        dump_dir = (args.dump_dir or c['dump_dir']).strip()
+        dump_dir = (args.dump_dir or c['dump_dir']).strip() or core.DEFAULTS['dump_dir']
+        if not direct and core.dump_dir_status(dump_dir) == 'no_bridge':
+            raise CliError('frida-ios-dump in {!r} still needs its npm packages: run "{} install-frida '
+                           '--dump-dir {}" (it installs them), or choose another --mode'.format(dump_dir, RUN, dump_dir))
         if not direct and core.dump_dir_status(dump_dir) != 'ok':
             raise CliError('frida-ios-dump is not set up in {!r}: run "{} install-frida-ios-dump" '
                            'or use --dump-dir, or choose another --mode'.format(dump_dir, RUN))
@@ -564,7 +575,7 @@ def finish(cli, mode, jobs, outdir, names):
     records = cli.results(mode, jobs, outdir, names)
     if cli.args.json:
         print(json.dumps(records, ensure_ascii=False, indent=2))
-    elif not cli.quiet:
+    else:                      # also with --quiet: the result is what -q leaves
         for record in records:
             print('{}\t{}\t{}'.format('ok' if record['ok'] else 'failed', record['bundle'], record['path'] or record['message']))
     info = cli.finished or {}
@@ -637,14 +648,23 @@ def cmd_install_frida(cli):
     ok = cli.install_frida(version, dump_dir)
     if ok:
         cli.log(Text('log_frida_installed', version=frida_versions.client_version(version)))
-    return EXIT_OK if ok else EXIT_FAILED
+    if not ok:
+        raise CliError('installing frida {} failed'.format(version), EXIT_FAILED)         # also with --quiet
+    return EXIT_OK
 
 
 def cmd_install_frida_ios_dump(cli):
-    target = os.path.abspath(cli.args.folder or cli.settings['dump_dir'])
+    target = os.path.abspath(cli.args.folder or cli.settings['dump_dir'].strip() or core.DEFAULTS['dump_dir'])
     if os.path.isdir(target) and os.listdir(target):
-        if core.dump_dir_status(target) != 'missing':
-            print('{} is already set up'.format(target), file=sys.stderr)
+        status = core.dump_dir_status(target)
+        if status != 'missing':
+            if status == 'no_bridge':
+                print('{} is downloaded; its npm packages are still missing: run "{} install-frida --dump-dir {}"'
+                      .format(target, RUN, target), file=sys.stderr)
+            else:
+                print('{} is already set up'.format(target), file=sys.stderr)
+            if cli.args.save:
+                update_settings(dict(dump_dir=target))
             return EXIT_OK
         raise CliError('{} is not empty and is not a frida-ios-dump folder'.format(target))
     cli.log(Text('log_downloading', path=target))
@@ -707,7 +727,7 @@ def update_settings(changes, reset=()):
     for key in reset:
         data.pop(key, None)
     for key, value in changes.items():
-        if str(value) == str(core.DEFAULTS[key]):
+        if str(value) == str(core.DEFAULTS[key]) or (key in ('dump_dir', 'outdir', 'extract_dir') and not value):
             data.pop(key, None)
         else:
             data[key] = value
@@ -877,7 +897,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.settings:
         core.CONFIG_PATH = os.path.abspath(args.settings)
-    if core.paramiko is None and args.command in ('apps', 'extract', 'decrypt', 'install-frida'):
+    offline = args.command == 'install-frida' and (getattr(args, 'list', False) or getattr(args, 'version', None))
+    if core.paramiko is None and args.command in ('apps', 'extract', 'decrypt', 'install-frida') and not offline:
         print('paramiko is not installed: pip install "paramiko>=3" cryptography', file=sys.stderr)
         return EXIT_USAGE
     cli = Cli(args)
@@ -887,9 +908,12 @@ def main(argv=None):
     except CliError as error:
         print('error: {}'.format(error), file=sys.stderr)
         return error.status
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         print('interrupted', file=sys.stderr)
         return EXIT_CANCELLED
+    except (OSError, core.paramiko.SSHException if core.paramiko else OSError) as error:
+        print('error: {}'.format(error), file=sys.stderr)
+        return EXIT_FAILED
     finally:
         signal.signal(signal.SIGINT, previous)
         cli.close()

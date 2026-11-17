@@ -426,13 +426,51 @@ class WindowTests(unittest.TestCase):
         info.assert_called_once()
         gui.run_background.assert_not_called()
 
-    def test_a_helper_that_fails_on_the_device_warns_once_per_batch(self):
+    def test_a_helper_that_fails_on_the_device_is_logged_once_per_batch_without_a_dialog(self):
         gui = self.gui
         gui.helper_warned = False
+        gui.log = mock.Mock()
         with mock.patch.object(messagebox, 'showwarning') as warning:
             gui.helper_problem('would not start')
             gui.helper_problem('would not start')
+        warning.assert_not_called()          # a dialog would stop the progress of an unattended batch
+        gui.log.assert_called_once()
+
+    def test_a_batch_being_set_up_is_not_started_a_second_time(self):
+        gui = self.gui
+        started = []
+        gui._start_dump = lambda: started.append('dump')
+        gui._start_extract = lambda: started.append('extract')
+        gui.preparing = True                 # the first one still has its overwrite question open
+        gui.start_dump()
+        gui.start_extract()
+        self.assertEqual(started, [])
+        gui.preparing = False
+        gui.start_dump()
+        self.assertEqual(started, ['dump'])
+        self.assertFalse(gui.preparing)      # given back once it is over, whatever it did
+
+    def test_the_flag_is_given_back_when_setting_up_fails(self):
+        gui = self.gui
+
+        def broken():
+            raise ValueError
+
+        gui._start_dump = broken
+        with self.assertRaises(ValueError):
+            gui.start_dump()
+        self.assertFalse(gui.preparing)
+
+    def test_the_app_list_is_not_replaced_while_a_batch_is_being_set_up(self):
+        gui = self.gui
+        gui.ssh = object()
+        gui.preparing = True
+        gui.run_background = mock.Mock()
+        with mock.patch.object(messagebox, 'showwarning') as warning:
+            gui.load_apps()
         warning.assert_called_once()
+        gui.run_background.assert_not_called()
+        gui.preparing = False
 
     def test_file_mapping_on_ios_15_and_the_other_helpers_go_on(self):
         for helper, device_os in (('mremap', 'iOS 15.8'), ('auto', 'iOS 16.1.2'), ('memory', 'iOS 17.0')):

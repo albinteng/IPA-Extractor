@@ -84,6 +84,7 @@ COLUMNS = (
 )
 SHIFT_MASK = 0x0001          # Tk event.state bit for the Shift key
 PROGRESS_LABEL_CHARS = 70    # the progress label has a fixed width
+CLOSE_WAIT = 20             # seconds a cancelled batch gets to clean up when the window is closed
 
 UNSPACED = '฀-๿぀-ヿ㐀-鿿豈-﫿'
 WRAP_TOKEN = re.compile(r'(?:[^\W' + UNSPACED + r']|[.\-/\\:@{}()«»„“”‘’"])+|\s+|.')
@@ -171,9 +172,20 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.sort_column = 'name'
         self.sort_reverse = False
         self.dumping = False     # a batch (decrypted or original IPAs) is running
+        self.reading_os = None   # the connection (generation) whose iOS version is being read: a start waits for it
+        self.os_asked = None     # the connection (generation) whose iOS version was asked for a native start
+        self.preparing = False   # one is being set up: its questions are open, nothing may change under them
+        self.batch_thread = None
+        self.closing = False
+        self.downloading = False       # frida-ios-dump is being downloaded
+        self.apps_serial = 0       # numbers the scans of the app list; only the latest goes on
+        self.frida_declined = False      # the offer to install frida was refused on this connection
         self.cancel_requested = threading.Event()
         self.current_process = None
         self.generation = 0      # invalidates background work from older connections
+        aside = self.set_damaged_settings_aside()
+        if aside:
+            self.after(200, lambda: self.log('The settings file could not be read, so the defaults are used. It was kept as ' + aside))
         c = dict(DEFAULTS, **load_config())
         self.locales = i18n.load_locales()
         self.lang_setting = c['lang'] if c['lang'] in self.locales else i18n.AUTO
@@ -194,7 +206,7 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.var_user = tk.StringVar(value=c['user'])
         self.var_password = tk.StringVar(value=c.get('password', ''))
         self.var_frida_port = tk.StringVar(value=str(c['frida_port']))
-        self.var_remember = tk.BooleanVar(value=bool(c.get('password')))
+        self.var_remember = tk.BooleanVar(value='password' in c)
         self.var_search = tk.StringVar()
         self.var_user_only = tk.BooleanVar(value=c['user_only'])
         self.var_non_apple = tk.BooleanVar(value=c['non_apple'])
@@ -233,6 +245,9 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.installing = False   # a frida version is being installed
         self._build_ui()
         self.protocol('WM_DELETE_WINDOW', self.on_close)
+        # Unticking the box removes the saved password at once, not with the next unrelated save.
+        self.var_remember.trace_add('write', lambda *args: self._save_config())
+        self.drain_scheduled = True
         self.after(100, self._drain_events)
         self.after(3000, self._watch_connection)
         self.log(self.ready_text())
@@ -808,7 +823,7 @@ class DumpGUI(DumpEngine, tk.Tk):
             self.show_details()
             # A folder fixed in Settings takes effect without reconnecting.
             if (self.ssh is not None and self.needs_frida() and self.frida_version is None
-                    and not self.frida_connecting
+                    and not self.frida_connecting and not self.frida_declined
                     and (self.direct_method()
                          or dump_dir_status(self.var_dump_dir.get().strip()) == 'ok')):
                 self.connect_frida()
@@ -886,12 +901,13 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.var_connection.set(name)
         if name == previous:
             return
-        if self.dumping:
+        if self.busy():
             messagebox.showwarning(self.t('m_busy_t'), self.t('m_busy'))
             self.var_connection.set(previous)       # the radio button goes back
             return
         if self.ssh is not None or self.ssh_connecting:
-            if not messagebox.askyesno(self.t('connection'), self.t('m_conn_switch')):
+            answer = messagebox.askyesno(self.t('connection'), self.t('m_conn_switch'))
+            if not answer or self.busy():       # a batch may have begun while the question was open
                 self.var_connection.set(previous)       # the radio button goes back
                 return
             self.disconnect('state_disconnected')       # the old connection ends here: nothing of it outlives the switch
@@ -1076,6 +1092,10 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.events.put((func, args))
 
     def _drain_events(self):
+        # The next round is scheduled first: a callback that opens a dialog keeps running inside it, and the
+        # window must go on handling the events of the batch meanwhile (the flag keeps it to one timer).
+        self.drain_scheduled = False
+        self._schedule_drain()
         try:
             while True:
                 func, args = self.events.get_nowait()
@@ -1085,12 +1105,35 @@ class DumpGUI(DumpEngine, tk.Tk):
                     self.report_callback_exception(*sys.exc_info())
         except queue.Empty:
             pass
-        self.after(50, self._drain_events)
+
+    def _schedule_drain(self):
+        if not self.drain_scheduled:
+            self.drain_scheduled = True
+            self.after(50, self._drain_events)
 
     def run_background(self, target, *args):
-        threading.Thread(target=target, args=args, daemon=True).start()
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        thread.start()
+        return thread
 
     # ----------------------------------------------------------- connection
+    @staticmethod
+    def set_damaged_settings_aside():
+        """A settings file that cannot be read is renamed to .bad, so the next save does not destroy it."""
+        try:
+            engine.load_config(strict=True)
+        except ValueError:
+            target, number = engine.CONFIG_PATH + '.bad', 1
+            while os.path.exists(target):               # an earlier .bad is not overwritten
+                number += 1
+                target = '{}.bad{}'.format(engine.CONFIG_PATH, number)
+            try:
+                os.replace(engine.CONFIG_PATH, target)
+                return target
+            except OSError:
+                pass
+        return None
+
     def _save_config(self):
         data = dict(host=self.var_host.get().strip(), port=self.var_port.get().strip(),
                     user=self.var_user.get().strip(), frida_port=self.var_frida_port.get().strip(),
@@ -1106,9 +1149,15 @@ class DumpGUI(DumpEngine, tk.Tk):
                     separate_dirs=self.var_separate_dirs.get(), font=self.var_font.get(),
                     font_size=self.var_font_size.get(), theme=self.var_theme.get(),
                     connection=self.var_connection.get(), usb_device=self.var_usb_device.get().strip())
+        for key in ('port', 'frida_port', 'font_size'):       # typed as text, kept as numbers like the defaults
+            if data[key].isdecimal():
+                data[key] = int(data[key])
         data = {key: value for key, value in data.items() if str(value) != str(DEFAULTS[key])}
         if self.var_remember.get():
             data['password'] = self.var_password.get()
+        for key, value in load_config().items():       # keys of a newer version stay in the file
+            if key not in DEFAULTS and key != 'password':
+                data.setdefault(key, value)
         try:
             engine.save_config(data)
         except OSError as error:
@@ -1116,7 +1165,7 @@ class DumpGUI(DumpEngine, tk.Tk):
 
     def toggle_connection(self):
         if self.ssh is not None:
-            if self.dumping:
+            if self.busy():
                 messagebox.showwarning(self.t('m_busy_t'), self.t('m_busy'))
                 return
             self.disconnect('state_disconnected')
@@ -1125,6 +1174,9 @@ class DumpGUI(DumpEngine, tk.Tk):
 
     def connect(self):
         if self.ssh is not None or self.ssh_connecting:
+            return
+        if self.busy():            # the batch still runs on the old connection
+            messagebox.showwarning(self.t('m_busy_t'), self.t('m_busy'))
             return
         try:
             port = int(self.var_port.get())
@@ -1290,14 +1342,20 @@ class DumpGUI(DumpEngine, tk.Tk):
             return
         self.set_frida_state(Text('state_no_local', major=major(device_version)), 'error')
         self.log(Text('log_frida_missing', device=device_version, major=major(device_version)))
-        if self.dumping or not messagebox.askyesno(self.t('m_frida_get_t'), self.t(
-                'm_frida_get', device=device_version, major=major(device_version),
-                command=' '.join(frida_versions.install_command(device_version)))):
+        if self.busy() or self.installing:
+            return
+        answer = messagebox.askyesno(self.t('m_frida_get_t'), self.t(
+            'm_frida_get', device=device_version, major=major(device_version),
+            command=' '.join(frida_versions.install_command(device_version))))
+        if generation != self.generation or self.installing:      # the connection went away or an install began
+            return
+        if not answer:
+            self.frida_declined = True
             return
         self.set_frida_state(Text('state_installing', version=device_version), 'busy')
         self.installing = True
         self._checks_changed()
-        self.run_background(self._install_worker, device_version, None, then)
+        self.run_background(self._install_worker, device_version, None, then, generation)
 
     def _frida_connected(self, generation, tunnel, version, device_os, then):
         self.frida_connecting = False
@@ -1323,6 +1381,9 @@ class DumpGUI(DumpEngine, tk.Tk):
     def disconnect(self, reason):
         self._set_tree_busy(False)
         self.generation += 1
+        self.frida_connecting = False
+        self.apps_serial += 1        # the scan of the old connection stops without a message
+        self.frida_declined = False
         self.ssh_connecting = False         # a connect still running is stale now: its answer is dropped
         self._drop_frida()
         if self.ssh is not None:
@@ -1337,27 +1398,34 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.log(Text('log_disconnected', reason=Text(reason)))
 
     def _watch_connection(self):
+        self.after(3000, self._watch_connection)        # first: an error below must not end the watching
         transport = self.ssh.get_transport() if self.ssh is not None else None
         if self.ssh is not None and (transport is None or not transport.is_active()):
             self.disconnect('state_dropped')
-        self.after(3000, self._watch_connection)
 
     # ---------------------------------------------------------------- apps
     def load_apps(self):
         if self.ssh is None:
             messagebox.showinfo(self.t('m_not_connected_t'), self.t('m_not_connected'))
             return
+        if self.busy():            # the batch reads self.apps: a new list would take its apps away
+            messagebox.showwarning(self.t('m_busy_t'), self.t('m_busy'))
+            return
         self.log(Text('log_loading'))
         self._set_tree_busy(True)
-        self.run_background(self._load_apps_worker, self.generation, self.ssh)
+        self.apps_serial += 1        # a scan still running is stale now: it stops and its answers are dropped
+        self.run_background(self._load_apps_worker, self.generation, self.ssh, self.apps_serial)
 
-    def _load_apps_worker(self, generation, client):
+    def _load_apps_worker(self, generation, client, serial):
         # SSH alone is enough, so original IPAs can be extracted without Frida.
         try:
             apps = device_apps.list_apps(client)
         except Exception as error:
-            self.post(self._set_tree_busy, False)
-            self.post(self.log, Text('log_load_failed', error=error))
+            if serial == self.apps_serial:
+                self.post(self._set_tree_busy, False)
+                self.post(self.log, Text('log_load_failed', error=error))
+            return
+        if serial != self.apps_serial:
             return
         self.post(self._apps_loaded, generation, apps)
         # Signature details need several SFTP reads per app; fill them in progressively.
@@ -1369,7 +1437,7 @@ class DumpGUI(DumpEngine, tk.Tk):
             return
         try:
             for app in order:
-                if generation != self.generation:
+                if generation != self.generation or serial != self.apps_serial:
                     return
                 if not app['path'] or app.get('offloaded'):
                     continue
@@ -1380,7 +1448,8 @@ class DumpGUI(DumpEngine, tk.Tk):
                 self.post(self._app_info_loaded, generation, app['bundle'], info)
         finally:
             sftp.close()
-        self.post(self._app_info_done, generation)
+        if serial == self.apps_serial:
+            self.post(self._app_info_done, generation)
 
     def _set_tree_busy(self, busy):
         if self.root_frame is None:
@@ -1505,7 +1574,7 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.tree.heading('check', text=CHECKED if all_checked else UNCHECKED)
         state = 'disabled' if self.dumping or not self.checked else 'normal'
         self.btn_dump.configure(text=self.t('dump', n=len(self.checked)),
-                                state='disabled' if self.frida_connecting or self.installing else state)
+                                state='disabled' if (self.frida_connecting or self.installing or self.downloading) and self.needs_frida() else state)
         self.btn_extract.configure(text=self.t('extract', n=len(self.checked)), state=state)
 
     def on_tree_click(self, event):
@@ -1766,11 +1835,30 @@ class DumpGUI(DumpEngine, tk.Tk):
         if self.helper_warned:
             return
         self.helper_warned = True
-        messagebox.showwarning(self.t('m_helper_t'), self.t('m_helper', error=error))
+        self.log(self.t('m_helper', error=error))        # a dialog would stop the progress of an unattended batch
+
+    def busy(self):
+        """A batch runs or is being set up: connection, frida versions and the app list must stay as they are."""
+        return self.dumping or self.preparing or self.reading_os == self.generation
 
     def start_dump(self):
-        if self.dumping:
+        self._prepared(self._start_dump)
+
+    def start_extract(self):
+        self._prepared(self._start_extract)
+
+    def _prepared(self, start):
+        """Run start() as the one batch being set up. Its dialogs keep the window handling events (a pending
+        connection could start another batch meanwhile), so a second start is refused until it is over."""
+        if self.busy():
             return
+        self.preparing = True
+        try:
+            start()
+        finally:
+            self.preparing = False
+
+    def _start_dump(self):
         if self.ssh is None:
             messagebox.showinfo(self.t('m_not_connected_t'), self.t('m_not_connected'))
             return
@@ -1786,13 +1874,14 @@ class DumpGUI(DumpEngine, tk.Tk):
         if jobs is None:
             return
         native = self.native_method()
-        if native and not self.device_os:
-            # Connected before the method was switched to native: the version comes over SSH.
-            try:
-                version = native_decrypt.Device(self.ssh, self.var_user.get().strip(), self.var_password.get()).ios_version()
-            except Exception:
-                version = ''
-            self.device_os = 'iOS ' + version if version else None
+        if native and not self.device_os and self.os_asked != self.generation:
+            # Connected before the method was switched to native: the version comes over SSH, off the window's thread
+            # (a connection that hangs must not freeze the window); the start goes on when it is known.
+            self.os_asked = self.reading_os = self.generation
+            self.log(Text('log_reading_ios'))
+            self.run_background(self._ios_version_worker, self.generation, self.ssh, self.var_user.get().strip(),
+                                self.var_password.get())
+            return
         if native:
             try:
                 native_decrypt.local_helper(native_decrypt.choose(self.var_native_helper.get(), ios_major(self.device_os)))
@@ -1834,11 +1923,26 @@ class DumpGUI(DumpEngine, tk.Tk):
             self._checks_changed()
             messagebox.showinfo(self.t('m_not_connected_t'), self.t('m_not_connected'))
             return
-        self.run_background(self._dump_worker, jobs, options)
+        self.batch_thread = self.run_background(self._dump_worker, jobs, options)
 
-    def start_extract(self):
-        if self.dumping:
+    def _ios_version_worker(self, generation, client, user, password):
+        try:
+            version = native_decrypt.Device(client, user, password).ios_version()
+        except Exception:
+            version = ''
+        self.post(self._ios_version_known, generation, version)
+
+    def _ios_version_known(self, generation, version):
+        if self.reading_os == generation:
+            self.reading_os = None
+        if generation != self.generation or self.ssh is None:
             return
+        self.device_os = 'iOS ' + version if version else None
+        if not self.native_method() or self.busy():
+            return                  # the method was changed while reading: the next press of the button starts
+        self.start_dump()           # an unknown version is not asked for again on this connection
+
+    def _start_extract(self):
         if self.ssh is None or not self.apps:
             messagebox.showinfo(self.t('m_not_connected_t'), self.t('m_not_connected'))
             return
@@ -1852,7 +1956,7 @@ class DumpGUI(DumpEngine, tk.Tk):
         if outdir is None:
             return
         self.log(Text('log_extract_start', n=len(jobs)))
-        self.run_background(self._extract_worker, jobs, outdir)
+        self.batch_thread = self.run_background(self._extract_worker, jobs, outdir)
 
     def cancel_batch(self):
         if not messagebox.askyesno(self.t('m_cancel_t'), self.t('m_cancel')):
@@ -1935,6 +2039,8 @@ class DumpGUI(DumpEngine, tk.Tk):
             return False
 
     def offer_download(self, dump_dir, question='m_download'):
+        if self.downloading:
+            return
         if os.path.isdir(dump_dir) and not self.folder_readable_empty(dump_dir):
             messagebox.showerror(self.t('m_download_t'), self.t('m_dump_dir_busy', path=dump_dir))
             self.open_settings(tab=2)
@@ -1944,7 +2050,8 @@ class DumpGUI(DumpEngine, tk.Tk):
             return
         self.var_dump_dir.set(dump_dir)
         self._save_config()
-        self.btn_dump.configure(state='disabled')
+        self.downloading = True
+        self._checks_changed()
         self.log(Text('log_downloading', path=dump_dir))
         self.run_background(self._download_worker, dump_dir)
 
@@ -1953,9 +2060,14 @@ class DumpGUI(DumpEngine, tk.Tk):
             download_frida_ios_dump(dump_dir, lambda line: self.post(self.log, '  ' + line))
         except Exception as error:
             self.post(self.log, Text('log_download_failed', error=error))
-            self.post(self._checks_changed)
+            self.post(self._download_ended)
             return
+        self.post(self._download_ended)
         self.post(self._download_done)
+
+    def _download_ended(self):
+        self.downloading = False
+        self._checks_changed()
 
     def _download_done(self):
         self.log(Text('log_download_done'))
@@ -1965,7 +2077,7 @@ class DumpGUI(DumpEngine, tk.Tk):
         self.install_dependencies()
 
     def install_dependencies(self):
-        if self.dumping:
+        if self.busy():
             return
         if self.native_method():
             return
@@ -2038,10 +2150,14 @@ class DumpGUI(DumpEngine, tk.Tk):
             return version if version and re.fullmatch(r'\d+\.\d+\.\d+', version) else None
 
         def delete(version):
-            if self.dumping or self.installing:
+            if self.busy() or self.installing:
+                return
+            if self.frida_connecting:
                 return
             if not messagebox.askyesno(self.t('m_frida_delete_t'), self.t('m_frida_delete', version=version),
                                        parent=window):
+                return
+            if self.busy() or self.installing or self.frida_connecting:      # begun while the question was open
                 return
             in_use = version == self.frida_version
             if in_use:
@@ -2135,7 +2251,7 @@ class DumpGUI(DumpEngine, tk.Tk):
 
         def run():
             version = selected()
-            if not version or self.dumping or self.installing:
+            if not version or self.busy() or self.installing or self.frida_connecting:
                 return
             window.destroy()
             self.installing = True
@@ -2148,36 +2264,62 @@ class DumpGUI(DumpEngine, tk.Tk):
         refresh()
         self.run_background(fetch)
 
-    def _install_worker(self, version, dump_dir, then):
+    def _install_worker(self, version, dump_dir, then, generation=None):
         """Install frida `version` side by side with the others; then() runs once Frida reconnects."""
         ok = False
         try:
             ok = self.install_frida(version, dump_dir)
         finally:
-            self.post(self._install_finished, version, ok, then)
+            self.post(self._install_finished, version, ok, then, generation)
 
-    def _install_finished(self, version, ok, then):
+    def _install_finished(self, version, ok, then, generation=None):
         self.installing = False
         self._checks_changed()
+        if generation is not None and generation != self.generation:
+            then = None            # started on a connection that is gone: it must not begin work on the new one
         if not ok:
             if self.ssh is not None and self.frida_version is None:
                 self.set_frida_state(Text('state_failed'), 'error')
             return
+        self.frida_declined = False
         self.log(Text('log_frida_installed', version=frida_versions.client_version(version)))
         # No restart needed: reconnect so the best version for this device is picked again.
-        if (self.ssh is not None and not self.dumping and self.needs_frida()
+        if (self.ssh is not None and not self.busy() and self.needs_frida()
                 and (self.direct_method() or dump_dir_status(self.var_dump_dir.get().strip()) == 'ok')):
             self._drop_frida()
             self.connect_frida(then)
+        elif self.ssh is not None and self.frida_version is None:
+            self.set_frida_state(Text('state_unused'), 'idle')      # not left on "installing"
 
     # --------------------------------------------------------------- close
     def on_close(self):
+        if self.closing:         # the wait below keeps the window answering: a second click must not start another
+            return
+        self.closing = True
+        try:
+            self._close()
+        except Exception:
+            self.closing = False        # the window must stay closable
+            raise
+
+    def _close(self):
         if self.dumping:
             if not messagebox.askyesno(self.t('m_busy_t'), self.t('m_close')):
+                self.closing = False
                 return
             self.cancel_requested.set()
             if self.current_process is not None and self.current_process.poll() is None:
                 self.current_process.terminate()
+            # The batch removes what it left on the device (suspended apps, temporary folders, a half-written IPA)
+            # when it stops: give it the time before the connection goes away.
+            self.configure(cursor='watch')
+            self.update_idletasks()
+            waited = 0.0
+            while self.batch_thread is not None and self.batch_thread.is_alive() and waited < CLOSE_WAIT:
+                self.batch_thread.join(0.1)         # in small steps, so the window keeps answering
+                self.update()
+                waited += 0.1
+        engine.stop_children()      # a pip, npm or git still running must not outlive the window (after the question)
         self._save_config()
         if self.ssh is not None:
             self.disconnect('state_disconnected')
