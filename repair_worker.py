@@ -44,6 +44,7 @@ PREFIX = '@@'
 # itself comes last: asked while it runs, it often does not answer until Frida times out.
 EXTENSION_HOSTS = ('SpringBoard', 'AuthenticationServicesAgent', 'spawn:com.apple.Preferences', 'app')
 GATE_TIMEOUT = 15
+EXTENSION_STARTS = 3  # tries to start an extension and attach to it before giving up
 LOAD_ATTEMPTS = 5  # a framework that does not load at once is tried again, a second apart
 ALIVE_EVERY = 10  # seconds between "alive" events, so the GUI can tell slow from stuck
 _last_emit = [0.0]
@@ -287,27 +288,41 @@ class Worker:
     def extension(self, job):
         last_error = 'unsupported:extension'
         for host in list(self.host_order):
-            pid = None
-            alive()
-            for attempt in (1, 2):  # a host occasionally drops the connection; try it once more
+            session = None
+            for start in range(EXTENSION_STARTS):
+                pid = None
+                alive()
+                for attempt in (1, 2):  # a host occasionally drops the connection; try it once more
+                    try:
+                        pid = self.catch_extension(host, job)
+                        break
+                    except Exception as error:
+                        self.hosts.pop(host, None)
+                        last_error = describe(error)
+                        if 'timeout' in last_error.lower():
+                            # A host that hung once hangs again: leave it out for the other extensions.
+                            self.host_order.remove(host)
+                            break
+                if pid is None:
+                    break
                 try:
-                    pid = self.catch_extension(host, job)
+                    session = self.device.attach(pid)
                     break
                 except Exception as error:
-                    self.hosts.pop(host, None)
+                    # The extension's process was gone before Frida could use it (some extensions quit at once,
+                    # an unreliable moment on the device): start it again.
                     last_error = describe(error)
-                    if 'timeout' in last_error.lower():
-                        # A host that hung once hangs again: leave it out for the other extensions.
-                        self.host_order.remove(host)
-                        break
+                    emit('log', text='attach to extension {} failed ({}); starting it again'.format(job['extension'], last_error))
+                    session = None
+                    pid = None
+                    time.sleep(1)
             if pid is None:
                 continue
             # An app's extensions are mostly of a kind the same host knows: ask it first next time.
-            self.host_order.remove(host)
+            if host in self.host_order:
+                self.host_order.remove(host)
             self.host_order.insert(0, host)
-            session = None
             try:
-                session = self.device.attach(pid)
                 self.read_image(load_agent(session), job)
             except Exception as error:
                 self.fail_all(job, describe(error))

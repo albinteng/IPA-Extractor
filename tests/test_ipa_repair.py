@@ -202,6 +202,40 @@ class RepairWorkerHelperTests(unittest.TestCase):
         self.assertEqual(asked, ['spawn:com.apple.Preferences'])  # the host that worked first, the hung one dropped
         self.assertEqual(worker.host_order, ['spawn:com.apple.Preferences', 'SpringBoard', 'app'])
 
+    def test_an_extension_that_died_before_attach_is_started_again(self):
+        from unittest import mock
+        worker = self.worker.Worker.__new__(self.worker.Worker)
+        worker.hosts, worker.app_running = {}, False
+        worker.host_order = ['spawn:com.apple.Preferences']
+        started = []
+        worker.catch_extension = lambda host, job: started.append(host) or 40 + len(started)
+        attached = []
+
+        def attach(pid):
+            attached.append(pid)
+            if len(attached) < 3:    # the process was gone: "invalid destination port"
+                raise RuntimeError('unexpected error while attaching (invalid destination port)')
+            return mock.Mock()
+
+        worker.device = mock.Mock(attach=attach)
+        worker.read_image = mock.Mock()
+        job = {'id': '0', 'slices': [{}], 'extension': 'com.x.a'}
+        with mock.patch.object(self.worker, 'load_agent'), mock.patch.object(self.worker, 'emit'),                 mock.patch.object(self.worker.time, 'sleep'):
+            worker.extension(job)
+        self.assertEqual(attached, [41, 42, 43])            # each try starts the extension anew
+        worker.read_image.assert_called_once()
+        # Out of tries: the file fails with what the device said, and the next start is not made.
+        started.clear()
+        attached.clear()
+        worker.fail_all = mock.Mock()
+        worker.device = mock.Mock(attach=mock.Mock(side_effect=RuntimeError('invalid destination port')))
+        worker.read_image = mock.Mock()
+        worker.host_order = ['spawn:com.apple.Preferences']
+        with mock.patch.object(self.worker, 'load_agent'), mock.patch.object(self.worker, 'emit'),                 mock.patch.object(self.worker.time, 'sleep'):
+            worker.extension(job)
+        self.assertEqual(len(started), self.worker.EXTENSION_STARTS)
+        self.assertIn('invalid destination port', worker.fail_all.call_args[0][1])
+
     def test_frameworks_let_the_app_start_once_then_load_each(self):
         from unittest import mock
         worker = self.worker.Worker.__new__(self.worker.Worker)
