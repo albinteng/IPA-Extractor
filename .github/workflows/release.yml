@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write      # the release step attaches the archives to the release
+  contents: read
 
 jobs:
   build:
@@ -91,6 +91,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write      # only this job attaches the archives to the release; the builds install unpinned packages
     steps:
       - uses: actions/download-artifact@v4
         with:

@@ -13,6 +13,7 @@ import app_paths
 import engine
 import frida_versions
 import workers
+from tests.support import ROOT
 
 
 class PathTests(unittest.TestCase):
@@ -134,6 +135,16 @@ class ChildProcessTests(unittest.TestCase):
                     if not any(keyword.arg == 'stdin' for keyword in node.keywords):
                         missing.append('{}:{}'.format(name, node.lineno))
         self.assertEqual(missing, [])
+
+
+class BuildScriptTests(unittest.TestCase):
+    def test_the_scripts_an_old_frida_runs_as_files_go_into_the_build(self):
+        # frida 12 and 13 run with a Python 3.8 of their own, which cannot start the compiled program.
+        import build
+        arguments = build.command(os.path.join(tempfile.gettempdir(), 'build-check'))
+        for name in ('frida_probe.py', 'repair_worker.py'):
+            self.assertIn('--include-data-files={0}={0}'.format(name), arguments)
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, name)))
 
 
 if __name__ == '__main__':
