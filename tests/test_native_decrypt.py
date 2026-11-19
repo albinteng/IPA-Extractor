@@ -209,6 +209,7 @@ class MemoryTests(unittest.TestCase):
                 raise OSError('no such file ' + path)
             return handle
         sftp.open.side_effect = open_file
+        self.sftp = sftp
         reports, logs = [], []
         with tempfile.TemporaryDirectory() as work:
             native_decrypt.run_memory(device, 'com.x.app', self.APP, jobs, work,
@@ -218,6 +219,11 @@ class MemoryTests(unittest.TestCase):
                 with open(os.path.join(work, name), 'rb') as handle:
                     written[name] = handle.read()
         return device, reports, written, logs
+
+    def test_the_file_transfer_has_a_timeout(self):
+        self.run_jobs([job([slice_(cryptsize=4)], self.APP + '/App')], 'OK\tApp\t16777228\t0\t16384\t4\n',
+                      {'/var/tmp/helpers/out-1/App.range': b'abcd'})
+        self.sftp.get_channel.return_value.settimeout.assert_called_once_with(native_decrypt.SFTP_TIMEOUT)
 
     def test_ranges_are_read_for_the_matching_slices(self):
         files = {'/var/tmp/helpers/out-1/App.range': b'abcd',
@@ -330,21 +336,38 @@ class DeviceTests(unittest.TestCase):
         finally:
             release.set()
         self.assertEqual(result[0], -1)
-        stdout.channel.close.assert_called_once_with()
+        stdout.channel.close.assert_called_with()
         device.stop.assert_called_once_with('out-abc')
+
+    def test_the_channel_is_closed_when_the_command_is_done(self):
+        ssh, stdout = self.streams(lambda: b'')
+        native_decrypt.Device(ssh, 'root', '').run('true')
+        stdout.channel.close.assert_called_with()
 
     def test_a_helper_is_stopped_by_pkill_or_else_killall(self):
         device = native_decrypt.Device(mock.Mock(), 'root', '')
         device.text = mock.Mock()
-        device.stop('mremap_decrypt-1a2b')
-        command = device.text.call_args.args[0]
+        with mock.patch.object(native_decrypt.time, 'sleep'):
+            device.stop('mremap_decrypt-1a2b')
+        command = device.text.call_args_list[0].args[0]
         self.assertIn("pkill -f '[m]remap_decrypt-1a2b'", command)
         self.assertIn("killall mremap_decrypt-1a2b", command)
+
+    def test_a_helper_that_ignores_the_first_signal_is_killed_after_a_moment(self):
+        device = native_decrypt.Device(mock.Mock(), 'root', '')
+        device.text = mock.Mock()
+        with mock.patch.object(native_decrypt.time, 'sleep') as sleep:
+            device.stop('memory_decrypt-1a2b')
+        self.assertEqual(device.text.call_count, 2)
+        self.assertIn('pkill -f ', device.text.call_args_list[0].args[0])
+        self.assertIn("pkill -9 -f '[m]emory_decrypt-1a2b'", device.text.call_args_list[1].args[0])
+        sleep.assert_called_once_with(native_decrypt.STOP_GRACE)
 
     def test_the_pattern_to_stop_does_not_match_the_command_that_stops(self):
         device = native_decrypt.Device(mock.Mock(), 'root', '')
         device.text = mock.Mock()
-        device.stop('out-abc')
+        with mock.patch.object(native_decrypt.time, 'sleep'):
+            device.stop('out-abc')
         self.assertIn("'[o]ut-abc'", device.text.call_args.args[0])
 
 

@@ -39,6 +39,8 @@ CHUNK = 1024 * 1024
 RUN_TIMEOUT = 900         # memory_decrypt has the app start and load frameworks; seconds
 SLICE_TIMEOUT = 600
 USAGE_STATUS = 2          # what a helper exits with when run without arguments
+SFTP_TIMEOUT = 120        # seconds a file transfer may stay silent: a frozen device must not hold the tool for ever
+STOP_GRACE = 1.5          # seconds a helper gets to end its child (SIGTERM) before it is killed outright
 
 
 class HelperError(Exception):
@@ -102,11 +104,26 @@ class Device:
         cancelled() is asked twice a second while the command runs; once true the channel is closed, the
         processes of the helper named `kill` (its file name on the device) are stopped, and the status is -1. A command that outlasts
         `timeout` seconds raises socket.timeout.
+
+        The channel is closed when the command is done: sshd allows about 10 open sessions per connection, and a
+        channel left to the garbage collector makes the 11th command wait (10 s and more) until it is collected.
         """
+        opened = []
+        try:
+            return self._run(command, timeout, cancelled, kill, opened)
+        finally:
+            for channel in opened:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+
+    def _run(self, command, timeout, cancelled, kill, opened):
         if self.user != 'root':
             # Rootless jailbreaks log in as mobile; sudo takes the same password.
             command = "sudo -S -p '' sh -c {}".format(shlex.quote(command))
         stdin, stdout, stderr = self.ssh.exec_command(command, timeout=timeout)
+        opened.append(stdout.channel)
         if self.user != 'root':
             stdin.write(self.password + '\n')
             stdin.flush()
@@ -153,13 +170,16 @@ class Device:
     def stop(self, helper):
         """Stop the running processes of a helper, found by its file name (mremap_decrypt-<checksum>).
 
-        pkill comes with procps, which not every jailbreak has: killall is the fallback. The bracket keeps pkill
-        from matching its own command line.
+        SIGTERM first: memory_decrypt ends the app it started when it gets it. Whatever is still there after a
+        moment is killed. pkill comes with procps, which not every jailbreak has: killall is the fallback. The
+        bracket keeps pkill from matching its own command line.
         """
         name = shlex.quote(helper)
         pattern = shlex.quote('[' + helper[0] + ']' + helper[1:])
         try:
             self.text('pkill -f {} 2>/dev/null || killall {} 2>/dev/null; true'.format(pattern, name), timeout=20)
+            time.sleep(STOP_GRACE)
+            self.text('pkill -9 -f {} 2>/dev/null || killall -9 {} 2>/dev/null; true'.format(pattern, name), timeout=20)
         except Exception:           # the connection is gone: nothing left to stop from here
             pass
 
@@ -191,6 +211,7 @@ class Device:
             try:
                 self.text('mkdir -p {0} && chmod 755 {0}'.format(shlex.quote(folder)))
                 sftp = self.ssh.open_sftp()
+                sftp.get_channel().settimeout(SFTP_TIMEOUT)
                 try:
                     try:
                         present = sftp.stat(remote).st_size == size
@@ -323,6 +344,7 @@ def run_memory(device, bundle, app_path, jobs, work, report, log=lambda text: No
     """
     helper = device.upload(MEMORY)
     sftp = device.ssh.open_sftp()
+    sftp.get_channel().settimeout(SFTP_TIMEOUT)
     out = None
     try:
         executable = posixpath.join(app_path, app_executable(sftp, app_path))
