@@ -1,7 +1,9 @@
-built: 2026-11-09T09:57:56Z from a1c4d3cb690016cf175a033ea3a28d7906e09a85
+built: 2026-11-19T08:20:28Z from 83b9a796f4f3f72dfb927d0dd014888eed4c0500
 Apple clang version 21.0.0 (clang-2100.1.1.101)
 iphoneos SDK 26.5
 ldid usage: ldid -S[entitlements.xml] <binary>
+546ecfd3db98282dad50196ff8f67a86c8ba4b8c30c28accb6a392cedc5b4ba4  mremap_decrypt
+12de2ec9acd0529b8dc890a86dfe661206ac6f545b8bd0e469f3a5540c1d3df2  memory_decrypt
 -- mremap_decrypt
       cmd LC_VERSION_MIN_IPHONEOS
   cmdsize 16

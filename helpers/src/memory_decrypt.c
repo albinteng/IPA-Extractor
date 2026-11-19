@@ -74,6 +74,57 @@ static uint64_t now_ms(void) {
     return (uint64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
+// ---------------------------------------------------------------- the process being dumped
+// Whatever this helper started must not outlive it: the tool stops a helper with SIGTERM (cancel, timeout, lost
+// connection), and a suspended app left behind would block the next run (or the app) until a respring.
+static volatile pid_t g_pid;      // the process started for the dump, 0 = none
+static volatile task_t g_task;    // its task port, MACH_PORT_NULL = none
+static volatile pid_t g_aux;      // the child that calls SpringBoardServices, 0 = none
+static volatile int g_borrowed;   // g_pid is an app that was running already: it is only read, never ended
+
+static void on_signal(int sig) {
+    if (g_aux > 0) kill(g_aux, SIGKILL);
+    if (g_pid > 0 && !g_borrowed) {
+        if (g_task != MACH_PORT_NULL) xterminate(g_task);
+        kill(g_pid, SIGKILL);
+    }
+    _exit(128 + sig);
+}
+
+// Waits up to `ms` for a child to end. 1 when it is gone (or was never ours to wait for), 0 when it is still there.
+static int wait_gone(pid_t pid, int ms) {
+    for (int waited = 0;; waited += 10) {
+        int st = 0;
+        pid_t w = waitpid(pid, &st, WNOHANG);
+        if (w == pid || (w < 0 && errno != EINTR)) return 1;
+        if (waited >= ms) return 0;
+        usleep(10000);
+    }
+}
+
+// Waits up to `ms` for a child to stop (WUNTRACED) or end. 1 when its state changed (status is set; 0 when it is not
+// our child), 0 on timeout. Never blocks: a child that does not stop or die is the caller's to end.
+static int wait_stop(pid_t pid, int *status, int ms) {
+    for (int waited = 0;; waited += 5) {
+        pid_t w = waitpid(pid, status, WUNTRACED | WNOHANG);
+        if (w == pid) return 1;
+        if (w < 0 && errno != EINTR) {
+            *status = 0;
+            return 1;
+        }
+        if (waited >= ms) return 0;
+        usleep(5000);
+    }
+}
+
+// Ends a process: task_terminate first (SIGKILL alone may not reach a task that is suspended), then SIGKILL, then a
+// bounded wait.
+static void end_process(pid_t pid, task_t task) {
+    if (task != MACH_PORT_NULL) xterminate(task);
+    kill(pid, SIGKILL);
+    if (!wait_gone(pid, 3000)) note("pid %d did not end within 3 s", (int)pid);
+}
+
 // ---------------------------------------------------------------- memory
 static int read_mem(task_t task, uint64_t addr, void *buf, uint64_t len) {
     uint64_t done = 0;
@@ -412,8 +463,7 @@ static void run_probe(const char *spawn_path) {
             char label[64];
             snprintf(label, sizeof(label), "%s %s", k ? "app" : "sleep", susp ? "susp" : "run");
             probe_tfp(label, pid);
-            kill(pid, SIGKILL);
-            waitpid(pid, NULL, 0);
+            end_process(pid, MACH_PORT_NULL);
         }
     }
 }
@@ -422,7 +472,7 @@ static void run_probe(const char *spawn_path) {
 #include <dlfcn.h>
 static pid_t find_pid_by_path(const char *exec_path, int budget_ms) {
     const char *want = strncmp(exec_path, "/private", 8) == 0 ? exec_path + 8 : exec_path;
-    for (int waited = 0; waited < budget_ms; waited += 20) {
+    for (int waited = 0;; waited += 20) {
         int n = xlistpids(1, 0, NULL, 0);
         if (n > 0) {
             pid_t *pids = calloc(n / sizeof(pid_t) + 64, sizeof(pid_t));
@@ -440,6 +490,7 @@ static pid_t find_pid_by_path(const char *exec_path, int budget_ms) {
             }
             free(pids);
         }
+        if (waited >= budget_ms) break;
         usleep(20000);
     }
     return 0;
@@ -462,6 +513,7 @@ static int sbs_launch_child(const char *bundle_id) {
     pid_t ch = xfork();
     if (ch < 0) return -1;
     if (ch == 0) {
+        signal(SIGTERM, SIG_DFL);
         void *cf = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW);
         void *sbs = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
         if (!cf || !sbs) _exit(10);
@@ -471,27 +523,68 @@ static int sbs_launch_child(const char *bundle_id) {
         int rc = launch(mkstr(NULL, bundle_id, 0x08000100), 1);
         _exit(rc == 0 ? 0 : 12);
     }
+    g_aux = ch;
     int status = 0;
     for (int waited = 0; waited < 8000; waited += 20) {
         pid_t w = waitpid(ch, &status, WNOHANG);
-        if (w == ch) return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+        if (w == ch) {
+            g_aux = 0;
+            return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+        }
         usleep(20000);
     }
     note("SBS: the launch call did not return within 8 s; stopping it");
     kill(ch, SIGTERM);
-    for (int i = 0; i < 100; i++) {
-        if (waitpid(ch, &status, WNOHANG) == ch) return -2;
-        usleep(20000);
+    if (!wait_gone(ch, 2000)) {
+        kill(ch, SIGKILL);
+        wait_gone(ch, 3000);
     }
-    kill(ch, SIGKILL);
-    waitpid(ch, &status, 0);
+    g_aux = 0;
     return -2;
 }
 
+// How many images dyld lists in the task: below 2 means the process has not got as far as loading anything.
+static uint32_t dyld_image_count(task_t task) {
+    struct dyld_image_info *infos = NULL;
+    char *paths = NULL;
+    uint32_t n = list_images(task, &infos, &paths);
+    free(infos);
+    free(paths);
+    return n;
+}
+
+// 0: not started (go on with the other ways), 1: started suspended by the system, 2: it was running already and is
+// only read (g_borrowed): a user's app is never started again or ended.
 static int sbs_spawn(const char *bundle_id, const char *exec_path, pid_t *out_pid, task_t *out_task) {
+    pid_t running = find_pid_by_path(exec_path, 0);
+    if (running) {
+        task_t rt = MACH_PORT_NULL;
+        kern_return_t rk = xtfp(mach_task_self(), running, &rt);
+        note("SBS: %s is running already (pid %d), task_for_pid = %d %s", bundle_id, (int)running, rk, rk == KERN_SUCCESS ? "ok" : mach_error_string(rk));
+        if (rk != KERN_SUCCESS) return 0;
+        if (dyld_image_count(rt) >= 2) {
+            *out_pid = running;
+            *out_task = rt;
+            g_borrowed = 1;
+            return 2;
+        }
+        // Still at the start: what an earlier run left behind. It is no use to read, and nothing else wants it.
+        note("SBS: pid %d never got past the start (a leftover of an earlier run); ending it", (int)running);
+        end_process(running, rt);
+    }
     int lr = sbs_launch_child(bundle_id);
     note("SBS: launch of %s (suspended) -> %d", bundle_id, lr);
-    if (lr != 0) return 0;
+    if (lr != 0) {
+        // The call may have started the app before it failed or was stopped: do not leave it behind.
+        pid_t stray = find_pid_by_path(exec_path, 500);
+        if (stray) {
+            task_t st = MACH_PORT_NULL;
+            if (xtfp(mach_task_self(), stray, &st) != KERN_SUCCESS) st = MACH_PORT_NULL;
+            note("SBS: the failed launch left pid %d; ending it", (int)stray);
+            end_process(stray, st);
+        }
+        return 0;
+    }
     pid_t pid = find_pid_by_path(exec_path, 3000);
     if (!pid) {
         note("SBS: no process with path %s appeared", exec_path);
@@ -501,7 +594,7 @@ static int sbs_spawn(const char *bundle_id, const char *exec_path, pid_t *out_pi
     kern_return_t kr = xtfp(mach_task_self(), pid, &t);
     note("SBS: pid %d, task_for_pid = %d %s", pid, kr, kr == KERN_SUCCESS ? "ok" : mach_error_string(kr));
     if (kr != KERN_SUCCESS) {
-        kill(pid, SIGKILL);
+        end_process(pid, MACH_PORT_NULL);
         return 0;
     }
     xsuspend(t);
@@ -510,14 +603,19 @@ static int sbs_spawn(const char *bundle_id, const char *exec_path, pid_t *out_pi
     return 1;
 }
 
-enum { MODE_PTRACE = 1, MODE_RACE = 2, MODE_SUSPENDED = 3, MODE_SBS = 4 };
+enum { MODE_PTRACE = 1, MODE_RACE = 2, MODE_SUSPENDED = 3, MODE_SBS = 4, MODE_ATTACH = 5 };
 
 // Starts the executable without letting any of its code run if possible. Returns the mode used.
 static int spawn_target(const char *bundle_id, const char *exec_path, pid_t *out_pid, task_t *out_task) {
     kern_return_t kr;
-    if (bundle_id && sbs_spawn(bundle_id, exec_path, out_pid, out_task)) return MODE_SBS;
+    if (bundle_id) {
+        int sbs = sbs_spawn(bundle_id, exec_path, out_pid, out_task);
+        if (sbs == 1) return MODE_SBS;
+        if (sbs == 2) return MODE_ATTACH;
+    }
     // 1. fork + PT_TRACE_ME + exec: the child stops right after exec, before dyld runs.
     pid_t pid = xfork();
+    if (pid > 0) g_pid = pid;
     if (pid == 0) {
         if (xptrace(PT_TRACE_ME_, 0, NULL, 0) != 0) _exit(127);
         int dn = open("/dev/null", O_RDWR);
@@ -533,9 +631,8 @@ static int spawn_target(const char *bundle_id, const char *exec_path, pid_t *out
     }
     if (pid > 0) {
         int status = 0;
-        pid_t w;
-        do { w = waitpid(pid, &status, WUNTRACED); } while (w < 0 && errno == EINTR);
-        if (w == pid && WIFSTOPPED(status)) {
+        int changed = wait_stop(pid, &status, 10000);
+        if (changed && WIFSTOPPED(status)) {
             task_t t = MACH_PORT_NULL;
             kr = xtfp(mach_task_self(), pid, &t);
             note("fork+PT_TRACE_ME: stopped (signal %d), task_for_pid = %d %s", WSTOPSIG(status), kr,
@@ -545,12 +642,14 @@ static int spawn_target(const char *bundle_id, const char *exec_path, pid_t *out
                 *out_task = t;
                 return MODE_PTRACE;
             }
-        } else {
+        } else if (changed) {
             note("fork+PT_TRACE_ME: child did not stop (status 0x%x)", status);
+        } else {
+            note("fork+PT_TRACE_ME: child neither stopped nor ended within 10 s");
         }
         xptrace(PT_KILL_, pid, NULL, 0);
-        kill(pid, SIGKILL);
-        waitpid(pid, NULL, 0);
+        end_process(pid, MACH_PORT_NULL);
+        g_pid = 0;
     } else {
         note("fork failed: %s", strerror(errno));
     }
@@ -564,6 +663,7 @@ static int spawn_target(const char *bundle_id, const char *exec_path, pid_t *out
     char *av[] = {(char *)exec_path, NULL};
     int rc = posix_spawn(&pid, exec_path, &fa, NULL, av, environ);
     if (rc == 0) {
+        g_pid = pid;
         task_t t = MACH_PORT_NULL;
         kr = xtfp(mach_task_self(), pid, &t);
         note("posix_spawn running: task_for_pid = %d", kr);
@@ -573,8 +673,8 @@ static int spawn_target(const char *bundle_id, const char *exec_path, pid_t *out
             *out_task = t;
             return MODE_RACE;
         }
-        kill(pid, SIGKILL);
-        waitpid(pid, NULL, 0);
+        end_process(pid, MACH_PORT_NULL);
+        g_pid = 0;
     }
 
     // 3. suspended spawn, retrying task_for_pid
@@ -583,6 +683,7 @@ static int spawn_target(const char *bundle_id, const char *exec_path, pid_t *out
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_START_SUSPENDED);
     rc = posix_spawn(&pid, exec_path, &fa, &attr, av, environ);
     if (rc == 0) {
+        g_pid = pid;
         for (int i = 0; i < 50; i++) {
             task_t t = MACH_PORT_NULL;
             kr = xtfp(mach_task_self(), pid, &t);
@@ -595,8 +696,8 @@ static int spawn_target(const char *bundle_id, const char *exec_path, pid_t *out
             usleep(10000);
         }
         note("posix_spawn suspended: task_for_pid kept failing (%d)", kr);
-        kill(pid, SIGKILL);
-        waitpid(pid, NULL, 0);
+        end_process(pid, MACH_PORT_NULL);
+        g_pid = 0;
     }
     return 0;
 }
@@ -854,20 +955,20 @@ static int spawn_ptrace(const char *exec_path, pid_t *out_pid, task_t *out_task)
         _exit(127);
     }
     if (pid < 0) return 0;
+    g_pid = pid;
     int status = 0;
-    pid_t w;
-    do { w = waitpid(pid, &status, WUNTRACED); } while (w < 0 && errno == EINTR);
-    if (w == pid && WIFSTOPPED(status)) {
+    if (wait_stop(pid, &status, 10000) && WIFSTOPPED(status)) {
         task_t t = MACH_PORT_NULL;
         if (xtfp(mach_task_self(), pid, &t) == KERN_SUCCESS) {
+            g_task = t;
             *out_pid = pid;
             *out_task = t;
             return 1;
         }
     }
     xptrace(PT_KILL_, pid, NULL, 0);
-    kill(pid, SIGKILL);
-    waitpid(pid, NULL, 0);
+    end_process(pid, MACH_PORT_NULL);
+    g_pid = 0;
     return 0;
 }
 
@@ -933,9 +1034,9 @@ static void dump_extensions(const char *bundle_root, const char *out_root) {
                 printf("FAIL\t%s\tmain image not found in the task\n", erel);
             }
             xptrace(PT_KILL_, pid, NULL, 0);
-            xterminate(task);
-            kill(pid, SIGKILL);
-            waitpid(pid, NULL, 0);
+            end_process(pid, task);
+            g_pid = 0;
+            g_task = MACH_PORT_NULL;
         }
         closedir(dp);
     }
@@ -1004,12 +1105,9 @@ static void run_hang(const char *dylib) {
         }
     }
     kill(ch, SIGTERM);
-    for (int i = 0; i < 100; i++) {
-        if (waitpid(ch, &status, WNOHANG) == ch) return;
-        usleep(20000);
-    }
+    if (wait_gone(ch, 2000)) return;
     kill(ch, SIGKILL);
-    waitpid(ch, &status, 0);
+    wait_gone(ch, 3000);
 }
 
 // ---------------------------------------------------------------- main
@@ -1085,6 +1183,11 @@ int main(int argc, char **argv) {
     }
     const char *exec_path = argv[a], *bundle_root = argv[a + 1], *out_root = argv[a + 2];
 
+    signal(SIGTERM, on_signal);
+    signal(SIGINT, on_signal);
+    signal(SIGHUP, on_signal);
+    signal(SIGPIPE, on_signal);
+
     // 1. start the process without running its code
     pid_t pid = 0;
     task_t task = MACH_PORT_NULL;
@@ -1093,7 +1196,10 @@ int main(int argc, char **argv) {
         printf("FAIL\t-\tcould not start the app and get its task port\n");
         return 1;
     }
-    note("spawned pid %d, mode %s", pid, mode == MODE_SBS ? "sbs" : mode == MODE_PTRACE ? "ptrace-stop" : mode == MODE_RACE ? "race" : "suspended");
+    g_pid = pid;
+    g_task = task;
+    note("spawned pid %d, mode %s", pid,
+         mode == MODE_ATTACH ? "running app, read only" : mode == MODE_SBS ? "sbs" : mode == MODE_PTRACE ? "ptrace-stop" : mode == MODE_RACE ? "race" : "suspended");
 
     // 2. main executable
     uint64_t main_base = 0;
@@ -1112,7 +1218,10 @@ int main(int argc, char **argv) {
     }
 
     // 3. frameworks mapped by dyld
-    if (run && have_main) {
+    if (run && have_main && mode == MODE_ATTACH) {
+        // already running: frameworks are mapped, nothing to start, stop or load
+        dump_loaded(task, main_base, bundle_root, out_root);
+    } else if (run && have_main) {
         if (mode == MODE_PTRACE) {
             // let go of the child: it runs on its own from the exec stop (it is killed soon after this)
             note("PT_DETACH, letting the process run");
@@ -1191,9 +1300,10 @@ int main(int argc, char **argv) {
     }
 
     if (mode == MODE_PTRACE && !run) xptrace(PT_KILL_, pid, NULL, 0);
-    xterminate(task);
-    kill(pid, SIGKILL);
-    waitpid(pid, NULL, 0);
+    if (mode != MODE_ATTACH) end_process(pid, task);
+    g_pid = 0;
+    g_task = MACH_PORT_NULL;
+    g_borrowed = 0;
 
     // 5. app extensions
     if (appex) dump_extensions(bundle_root, out_root);

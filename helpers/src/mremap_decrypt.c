@@ -9,6 +9,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,18 @@
 #include <unistd.h>
 
 typedef int (*mremap_encrypted_fn)(void *, size_t, uint32_t, uint32_t, uint32_t);
+
+#define TIMEOUT_SECONDS 300     // the tool gives up after 600; a call stuck in the kernel must not wait that long
+
+// Reading the mapping after mremap_encrypted() can fault (SIGBUS) when a page cannot be decrypted, and a stuck call
+// would never end: both would leave the tool with only an exit status. Say what happened instead.
+static void on_signal(int sig) {
+    const char *text = sig == SIGALRM ? "timed out: the kernel did not answer in 300 seconds\n"
+                                      : "reading the decrypted range faulted (SIGBUS/SIGSEGV)\n";
+    ssize_t ignored = write(STDERR_FILENO, text, strlen(text));
+    (void)ignored;
+    _exit(1);
+}
 
 static int fail(const char *call) {
     int e = errno;
@@ -37,6 +50,11 @@ int main(int argc, char **argv) {
     uint32_t cpu = (uint32_t)strtoull(argv[6], NULL, 0);
     uint32_t subtype = (uint32_t)strtoull(argv[7], NULL, 0);
     const char *out = argv[8];
+
+    signal(SIGBUS, on_signal);
+    signal(SIGSEGV, on_signal);
+    signal(SIGALRM, on_signal);
+    alarm(TIMEOUT_SECONDS);
 
     mremap_encrypted_fn mremap_encrypted = (mremap_encrypted_fn)dlsym(RTLD_DEFAULT, "mremap_encrypted");
     if (!mremap_encrypted) {
