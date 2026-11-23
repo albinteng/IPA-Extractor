@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.support import ROOT, needs_window
 
@@ -79,17 +80,17 @@ class DumpMethodTests(unittest.TestCase):
     @needs_window
     def test_native_method_needs_no_frida_and_no_frida_ios_dump(self):
         import engine
-        import ipa_extractor
+        from gui.main_window import MainWindow
         from unittest import mock
         for method, direct, native, frida in ((engine.METHOD_FRIDA_DIRECT, True, False, True),
                                               (engine.METHOD_FRIDA_IOS_DUMP, False, False, True),
                                               (engine.METHOD_NATIVE, True, True, False)):
             gui = mock.Mock()
             gui.var_dump_method.get.return_value = method
-            self.assertEqual(ipa_extractor.DumpGUI.direct_method(gui), direct, method)
-            self.assertEqual(ipa_extractor.DumpGUI.native_method(gui), native, method)
-            gui.native_method = lambda g=gui: ipa_extractor.DumpGUI.native_method(g)
-            self.assertEqual(ipa_extractor.DumpGUI.needs_frida(gui), frida, method)
+            self.assertEqual(MainWindow.direct_method(gui), direct, method)
+            self.assertEqual(MainWindow.native_method(gui), native, method)
+            gui.native_method = lambda g=gui: MainWindow.native_method(g)
+            self.assertEqual(MainWindow.needs_frida(gui), frida, method)
 
 
 class GatedLaunchTests(unittest.TestCase):
@@ -116,27 +117,25 @@ class GatedLaunchTests(unittest.TestCase):
               '  4 T    xpcproxy UIKitApplication:com.foobar[11aa]\n')
         self.assertEqual(engine.gated_launches(ps, 'com.foo'), ([1, 2], [3, 4]))
 
-    @needs_window
     def test_release_gated_resumes_frida_server_and_services(self):
-        import ipa_extractor
+        import engine
         from unittest import mock
         outputs = {'launchctl list': (0, '-\t0\tcom.apple.x\n812\t-9\tre.frida.server\n'),
                    'ps -A -o pid=,stat=,args=': (0, ' 5 T xpcproxy com.foo.Ext\n 6 T xpcproxy com.apple.healthd\n')}
         gui = mock.Mock()
         gui._as_root.side_effect = lambda options, command: outputs.get(command, (0, ''))
-        gui._resume_frida_server = lambda options: ipa_extractor.DumpGUI._resume_frida_server(gui, options)
-        ipa_extractor.DumpGUI._release_gated(gui, {}, 'com.foo')
+        gui._resume_frida_server = lambda options: engine.DumpEngine._resume_frida_server(gui, options)
+        engine.DumpEngine._release_gated(gui, {}, 'com.foo')
         commands = [call.args[1] for call in gui._as_root.call_args_list]
         self.assertEqual([c for c in commands if c.startswith('kill')], ['kill -CONT 812', 'kill -9 5', 'kill -CONT 6'])
 
-    @needs_window
     def test_release_gated_survives_ssh_errors(self):
-        import ipa_extractor
+        import engine
         from unittest import mock
         gui = mock.Mock()
         gui._as_root.side_effect = OSError('channel closed')
-        ipa_extractor.DumpGUI._resume_frida_server(gui, {})
-        ipa_extractor.DumpGUI._release_gated(gui, {}, 'com.foo')  # neither raises
+        engine.DumpEngine._resume_frida_server(gui, {})
+        engine.DumpEngine._release_gated(gui, {}, 'com.foo')  # neither raises
 
 
 class RunningPidTests(unittest.TestCase):
@@ -236,6 +235,40 @@ class DumpWorkerTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AboutTests(unittest.TestCase):
+    def test_the_details_name_the_version_the_project_and_the_settings_file(self):
+        import engine
+        details = dict(engine.about_details())
+        self.assertEqual(details['about_version'], engine.__version__)
+        self.assertEqual(details['about_project'], engine.PROJECT_URL)
+        self.assertEqual(details['about_settings'], engine.CONFIG_PATH)
+        self.assertIn('Python ' + engine.platform.python_version(), details['about_system'])
+
+    def test_the_third_party_software_is_listed_with_its_license(self):
+        import engine
+        details = dict(engine.about_details())
+        for name in ('PySide6 / Qt (LGPL-3.0)', 'Paramiko (LGPL-2.1)', 'scp (LGPL-2.1+)'):
+            self.assertIn(name, details['about_libraries'])
+        self.assertIn('frida-ios-dump (MIT)', details['about_libraries'])      # also the ones that are downloaded when used
+        self.assertIn('Frida (wxWindows Library Licence 3.1)', details['about_libraries'])
+        self.assertNotIn('about_downloaded', details)                          # one list, not two
+
+    def test_the_helpers_build_date_comes_from_build_info(self):
+        import engine
+        with tempfile.TemporaryDirectory() as folder:
+            os.makedirs(os.path.join(folder, 'helpers', 'bin'))
+            path = os.path.join(folder, 'helpers', 'bin', 'BUILD_INFO.txt')
+            with mock.patch.object(engine.app_paths, 'APP_DIR', folder):
+                self.assertEqual(engine.helpers_built(), '')            # no file
+                with open(path, 'w') as handle:
+                    handle.write('built: 2026-11-19T08:20:28Z from abc\n')
+                self.assertEqual(engine.helpers_built(), '2026-11-19')
+                with open(path, 'w') as handle:
+                    handle.write('something else\n')
+                self.assertEqual(engine.helpers_built(), '')
+                self.assertNotIn('about_helpers', dict(engine.about_details()))
 
 
 class WorkingFilesTests(unittest.TestCase):

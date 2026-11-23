@@ -372,31 +372,31 @@ class OutputTests(unittest.TestCase):
 class EngineTests(unittest.TestCase):
     def test_the_window_and_the_command_line_share_the_engine(self):
         try:
-            import ipa_extractor
+            from gui import main_window
         except ImportError:
-            self.skipTest('no tkinter')
+            self.skipTest('no PySide6')
         for name in ('_extract_worker', '_dump_worker', '_finish_dump', '_repair', 'install_frida', 'ssh_alive'):
             self.assertTrue(hasattr(core.DumpEngine, name), name)
-            self.assertFalse(name in vars(ipa_extractor.DumpGUI), name)
+            self.assertFalse(name in vars(main_window.MainWindow), name)
         self.assertTrue(issubclass(ipa_cli.Cli, core.DumpEngine))
-        self.assertTrue(issubclass(ipa_extractor.DumpGUI, core.DumpEngine))
+        self.assertTrue(issubclass(main_window.MainWindow, core.DumpEngine))
 
-    def test_the_launcher_script_runs_the_command_line_without_tkinter(self):
-        code = ("import sys, runpy; sys.modules['tkinter'] = None; sys.argv = ['ipa_extractor.py', 'config', 'path']; "
+    def test_the_launcher_script_runs_the_command_line_without_pyside6(self):
+        code = ("import sys, runpy; sys.modules['PySide6'] = None; sys.argv = ['ipa_extractor.py', 'config', 'path']; "
                 "runpy.run_path('ipa_extractor.py', run_name='__main__')")      # as `python ipa_extractor.py config path`
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         done = subprocess.run([sys.executable, '-c', code], cwd=here, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(done.stdout.strip().endswith('.json'))
 
-    def test_the_command_line_runs_without_tkinter(self):
-        code = ("import sys; sys.modules['tkinter'] = None; import ipa_cli; "
-                "sys.exit(ipa_cli.main(['config', 'path']))")      # an import of tkinter would raise ImportError
+    def test_the_command_line_runs_without_pyside6(self):
+        code = ("import sys; sys.modules['PySide6'] = None; import ipa_cli; "
+                "sys.exit(ipa_cli.main(['config', 'path']))")      # an import of PySide6 would raise ImportError
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         done = subprocess.run([sys.executable, '-c', code], cwd=here, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(done.stdout.strip().endswith('.json'))
-        self.assertNotIn('tkinter', sys.modules.get('engine').__dict__)
+        self.assertNotIn('PySide6', sys.modules.get('engine').__dict__)
 
     def test_file_mapping_is_refused_on_ios_16_before_anything_runs(self):
         for argv in (['--helper', 'mremap'], []):

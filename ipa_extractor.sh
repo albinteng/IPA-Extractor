@@ -1,7 +1,7 @@
 #!/bin/sh
 # Launch IPA Extractor on Linux or macOS.
 # Python packages go into ./.venv (created on first run), so the system Python is never modified. What only the
-# system can provide (venv, tkinter) is offered through the package manager, with your say-so.
+# system can provide (venv) is offered through the package manager, with your say-so.
 HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 cd "$HERE" || exit 1
 
@@ -39,8 +39,8 @@ offer() {
 
 if [ ! -x .venv/bin/python ]; then
     PYTHON=$(command -v python3 || command -v python)
-    if [ -z "$PYTHON" ] || ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
-        echo "IPA Extractor needs Python 3.9 or later: https://www.python.org/downloads/" >&2
+    if [ -z "$PYTHON" ] || ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+        echo "IPA Extractor needs Python 3.10 or later: https://www.python.org/downloads/" >&2
         exit 1
     fi
     echo "Creating .venv for IPA Extractor's Python packages..." >&2
@@ -52,11 +52,12 @@ if [ ! -x .venv/bin/python ]; then
 fi
 VPY="$HERE/.venv/bin/python"
 
-# Only the window needs Tk, and every start checks it (a venv made earlier may predate a removed package).
-# The command line (any argument) runs on a server without it.
-if [ $# -eq 0 ] && ! "$VPY" -c 'import tkinter' 2>/dev/null; then
-    offer "Python's Tk support (tkinter)" python3-tk python3-tkinter tk python3-tk python-tk || exit 1
-    "$VPY" -c 'import tkinter' 2>/dev/null || { echo "tkinter still cannot be imported." >&2; exit 1; }
+# Only the window needs PySide6 (Qt), and every start checks it (a venv made earlier predates it). The command line
+# (any argument) runs on a server without it.
+if [ $# -eq 0 ] && ! "$VPY" -c 'import PySide6.QtWidgets' 2>/dev/null; then
+    echo "Installing PySide6 (the window's toolkit, about 100 MB) into .venv..." >&2
+    "$VPY" -m pip --version >/dev/null 2>&1 || "$VPY" -m ensurepip --upgrade >/dev/null 2>&1
+    "$VPY" -m pip install -q PySide6-Essentials || { echo "Could not install PySide6." >&2; exit 1; }
 fi
 
 # The command line has no window to ask in: it gets its packages here. (The window asks for them itself.)

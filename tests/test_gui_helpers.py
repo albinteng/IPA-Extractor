@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Helpers of the window that need no window: themes and text wrapping."""
+"""Helpers of the window that need no window: themes."""
 
 import unittest
 
@@ -37,14 +37,14 @@ class ThemeTests(unittest.TestCase):
 
     @needs_window
     def test_every_theme_defines_every_colour_and_black_is_black(self):
-        import ipa_extractor
-        keys = set(ipa_extractor.PALETTES['light'])
-        for name, palette in ipa_extractor.PALETTES.items():
+        from gui import theme
+        keys = set(theme.PALETTES['light'])
+        for name, palette in theme.PALETTES.items():
             self.assertEqual(set(palette), keys, name)
             for value in palette.values():
                 self.assertRegex(value, r'^#[0-9a-f]{6}$')
-        self.assertEqual(ipa_extractor.PALETTES['black']['bg'], '#000000')
-        self.assertEqual(ipa_extractor.PALETTES['black']['field'], '#000000')
+        self.assertEqual(theme.PALETTES['black']['bg'], '#000000')
+        self.assertEqual(theme.PALETTES['black']['side'], '#000000')
 
     def test_every_language_names_the_themes(self):
         import i18n
@@ -52,38 +52,6 @@ class ThemeTests(unittest.TestCase):
             for key in ('theme', 'theme_system', 'theme_light', 'theme_dark', 'theme_black'):
                 self.assertTrue(strings.get(key), (code, key))
             self.assertEqual(len({strings['theme_system'], strings['theme_light'], strings['theme_dark'], strings['theme_black']}), 4, code)
-
-
-@needs_window
-class WrapTextTests(unittest.TestCase):
-    class Font:
-        def measure(self, text):
-            return 10 * len(text)
-
-    def wrap(self, text, width):
-        import ipa_extractor
-        return ipa_extractor.wrap_text(text, width, self.Font()).split('\n')
-
-    def test_words_of_spaced_scripts_are_never_split(self):
-        for text in ('Расшифрованные приложения читаются', 'Entschlüsselung ausführbarer Dateien', 'Giải mã ứng dụng đã cài',
-                     'Şifre çözme işlemi tamamlandı', '복호화 모드를 선택하세요'):
-            words = set(text.split())
-            for line in self.wrap(text, 140):
-                for word in line.split():
-                    self.assertIn(word, words, line)
-
-    def test_a_long_word_stays_on_a_line_of_its_own(self):
-        self.assertEqual(self.wrap('aa Расшифровывать bb', 100), ['aa', 'Расшифровывать', 'bb'])
-
-    def test_unspaced_scripts_break_between_characters(self):
-        self.assertEqual(self.wrap('これは長い日本語の文です', 50), ['これは長い', '日本語の文', 'です'])
-        self.assertEqual(self.wrap('這是一段很長的中文說明', 50), ['這是一段很', '長的中文說', '明'])
-        thai = 'การตั้งค่านี้ใช้กับ'
-        self.assertTrue(all(len(line) <= 5 for line in self.wrap(thai, 50)))
-
-    def test_paths_and_identifiers_stay_whole(self):
-        path = r'C:\Users\me\frida-ios-dump'
-        self.assertEqual(self.wrap('open ' + path + ' now', 150), ['open', path, 'now'])
 
 
 if __name__ == '__main__':

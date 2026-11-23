@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """The part of IPA Extractor that needs no window: settings, the SSH connection, and DumpEngine, which copies and
-decrypts apps. The window (ipa_extractor.py) and the command line (ipa_cli.py) both build on it; it never imports tkinter."""
+decrypts apps. The window (gui/) and the command line (ipa_cli.py) both build on it; it never imports Qt."""
 
-__version__ = '4.3'
+__version__ = '5.0'
 APP_NAME = 'IPA Extractor'
+PROJECT_URL = 'https://github.com/albinteng/IPA-Extractor'
 
 import contextlib
 import importlib.util
@@ -50,11 +51,57 @@ MEMORY_FROM_IOS = 16  # mremap_encrypted is refused from iOS 16 on; the system l
 PROBE = os.path.join(script_dir, 'frida_probe.py')
 PROBE_TIMEOUT = 30
 ASSETS = os.path.join(script_dir, 'assets')
+LICENSES_PATH = os.path.join(script_dir, 'licenses.txt')      # the license texts shown in Settings > About
 DEFAULT_DUMP_DIR = (os.path.join(app_paths.OUTPUT_BASE, 'frida-ios-dump') if app_paths.FROZEN
                     else os.path.join(os.path.dirname(script_dir), 'frida-ios-dump'))
 IS_WINDOWS = sys.platform == 'win32'
 IS_MACOS = sys.platform == 'darwin'
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
+def helpers_built():
+    """The date ('2026-11-19') the device helpers in helpers/bin were built, '' when it is not known."""
+    try:
+        with open(os.path.join(app_paths.APP_DIR, 'helpers', 'bin', 'BUILD_INFO.txt'), encoding='utf-8') as handle:
+            match = re.match(r'built: (\d{4}-\d\d-\d\d)', handle.readline())
+    except OSError:
+        return ''
+    return match.group(1) if match else ''
+
+
+def licenses_text():
+    """The license texts of the program and of what it contains (licenses.txt, which is part of the program)."""
+    try:
+        with open(LICENSES_PATH, encoding='utf-8') as handle:
+            return handle.read()
+    except OSError:
+        return 'IPA Extractor is under the MIT license.\nThe license texts are in the source: {}\n'.format(PROJECT_URL)
+
+
+def about_details():
+    """[(locale key of the label, text)] for the About tab: what to put in a bug report."""
+    libraries = []
+    for name in ('paramiko', 'cryptography'):
+        try:
+            import importlib.metadata
+            libraries.append('{} {}'.format(name, importlib.metadata.version(name)))
+        except Exception:             # not installed (or no metadata in a built program)
+            module = sys.modules.get(name)
+            version = getattr(module, '__version__', '')
+            if version:
+                libraries.append('{} {}'.format(name, version))
+    system = ' \u00b7 '.join([platform.platform(), 'Python ' + platform.python_version()] + libraries)
+    details = [('about_version', __version__), ('about_project', PROJECT_URL), ('about_license', 'MIT'),
+               ('about_system', system)]
+    built = helpers_built()
+    if built:
+        details.append(('about_helpers', built))
+    libraries = ['PySide6 / Qt (LGPL-3.0)', 'Paramiko (LGPL-2.1)', 'scp (LGPL-2.1+)',
+                 'cryptography (Apache-2.0 / BSD-3-Clause)', 'bcrypt, PyNaCl, cffi (Apache-2.0 / MIT-0)',
+                 'Python (PSF License)', 'Frida (wxWindows Library Licence 3.1)', 'frida-ios-dump (MIT)']
+    details.append(('about_libraries', '\n'.join(libraries)))
+    details.append(('about_settings', CONFIG_PATH))
+    return details
+
+
 FRIDA_IOS_DUMP_URL = 'https://github.com/AloneMonkey/frida-ios-dump'
 FRIDA_SERVER_PATHS = ('/usr/sbin/frida-server', '/var/jb/usr/sbin/frida-server')
 
@@ -144,7 +191,7 @@ PYPI_FRIDA_URL = 'https://pypi.org/pypi/frida/json'
 PROGRESS_INTERVAL = 0.2      # seconds between progress updates while streaming an IPA
 # frida-server needs a few seconds to be respawned by launchd after it is killed.
 RESTART_GRACE, RESTART_TIMEOUT, RESTART_POLL = 3, 45, 2
-BASE_PACKAGES = ['paramiko>=3', 'cryptography'] + (['sv-ttk'] if sys.platform.startswith('linux') else [])
+BASE_PACKAGES = ['paramiko>=3', 'cryptography']
 ERROR_PATTERNS = (
     ('preflight', 'failed preflight checks'),
     ('timeout', 'timeout was reached'),

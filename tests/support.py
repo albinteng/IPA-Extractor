@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Builders and fixtures shared by several test files: Mach-O and IPA files, and the skip for a missing Tk."""
+"""Builders and fixtures shared by several test files: Mach-O and IPA files, and the skip for a missing PySide6."""
 
 import os
 import struct
@@ -12,12 +12,14 @@ import app_info
 
 ROOT = Path(__file__).resolve().parent.parent
 
-try:
-    import tkinter
-except ImportError:
-    tkinter = None
+os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')       # the window tests draw into memory: no window appears
 
-needs_window = unittest.skipIf(tkinter is None, 'tkinter is not installed (the window needs it, the command line does not)')
+try:
+    import PySide6
+except ImportError:
+    PySide6 = None
+
+needs_window = unittest.skipIf(PySide6 is None, 'PySide6 is not installed (the window needs it, the command line does not)')
 
 
 def code_directory(identifier, team):

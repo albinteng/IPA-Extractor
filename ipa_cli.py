@@ -31,7 +31,7 @@ import native_decrypt
 import remote
 import usbmux
 
-# The engine needs no window and no tkinter: the command line runs on a server without Tk.
+# The engine needs no window and no Qt: the command line runs on a server without PySide6.
 import engine as core
 from engine import Text, Indented
 

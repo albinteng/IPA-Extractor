@@ -76,7 +76,7 @@ class FridaVersionTests(unittest.TestCase):
 
     @needs_window
     def test_gui_does_not_import_frida(self):
-        code = 'import sys, ipa_extractor; print("frida" in sys.modules)'
+        code = 'import sys, gui.main_window; print("frida" in sys.modules)'
         output = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True,
                                 text=True, check=True).stdout
         self.assertEqual(output.strip(), 'False')
