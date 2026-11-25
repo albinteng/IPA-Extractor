@@ -121,8 +121,8 @@ class ChildProcessTests(unittest.TestCase):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         starters = ('run', 'Popen', 'check_output', 'check_call', 'call')
         missing = []
-        for path in sorted(glob.glob(os.path.join(root, '*.py'))):
-            name = os.path.basename(path)
+        for path in sorted(glob.glob(os.path.join(root, '*.py')) + glob.glob(os.path.join(root, 'gui', '*.py'))):
+            name = os.path.relpath(path, root)
             if name == 'build.py':          # the developer's build script, not part of the released program
                 continue
             with open(path, encoding='utf-8') as handle:
@@ -145,6 +145,53 @@ class BuildScriptTests(unittest.TestCase):
         for name in ('frida_probe.py', 'repair_worker.py'):
             self.assertIn('--include-data-files={0}={0}'.format(name), arguments)
             self.assertTrue(os.path.isfile(os.path.join(ROOT, name)))
+
+
+class ReadmeTests(unittest.TestCase):
+    def test_the_pictures_of_the_readme_exist(self):
+        import re
+        with open(os.path.join(ROOT, 'README.md'), encoding='utf-8') as handle:
+            text = handle.read()
+        pictures = re.findall(r'<img src="([^"]+)"', text) + re.findall(r'!\[[^\]]*\]\(([^)]+)\)', text)
+        self.assertTrue(pictures)
+        for path in pictures:
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, path)), path)
+
+
+class QtBuildTests(unittest.TestCase):
+    def test_the_program_is_built_with_qt_and_without_tk(self):
+        import build
+        arguments = build.command(os.path.join(tempfile.gettempdir(), 'build-check'))
+        self.assertIn('--enable-plugin=pyside6', arguments)
+        self.assertNotIn('--enable-plugin=tk-inter', arguments)
+        self.assertFalse([a for a in arguments if 'sv_ttk' in a])
+        self.assertIn('--include-data-files=gui/check.svg=gui/check.svg', arguments)      # what the style sheet draws ticks with
+        self.assertIn('--include-data-files=gui/check_disabled.svg=gui/check_disabled.svg', arguments)
+        for name in ('check.svg', 'check_disabled.svg'):
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, 'gui', name)))
+
+    def test_the_license_texts_are_inside_the_program(self):
+        with open(os.path.join(ROOT, 'build.py'), encoding='utf-8') as handle:
+            self.assertIn('--include-data-files=licenses.txt=licenses.txt', handle.read())
+        text = engine.licenses_text()
+        self.assertIn('MIT License', text)                                   # the program's own
+        for name in ('Qt 6 and PySide6', 'Paramiko', 'scp.py', 'cryptography', 'bcrypt', 'PyNaCl', 'cffi', 'pycparser',
+                     'GNU Lesser General Public License, version 3', 'GNU General Public License, version 3',
+                     'Apache License, version 2.0', 'Frida', 'frida-ios-dump'):
+            self.assertIn(name, text)
+        for line in engine.about_details():
+            if line[0] == 'about_libraries':
+                for library in ('PySide6', 'Paramiko', 'scp', 'cryptography'):
+                    self.assertIn(library, line[1])
+
+    def test_the_downloads_are_the_single_program_file(self):
+        path = os.path.join(ROOT, '.github', 'workflows', 'release.yml')
+        if not os.path.isfile(path):
+            self.skipTest('no release workflow here (the test account runs the tests alone)')
+        with open(path, encoding='utf-8') as handle:
+            release = handle.read()
+        self.assertNotIn('THIRD-PARTY-LICENSES', release)
+        self.assertNotIn('cp LICENSE', release)
 
 
 if __name__ == '__main__':

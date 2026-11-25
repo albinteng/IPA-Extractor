@@ -7,20 +7,27 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi o
 - **Original IPA** – packs the installed app as-is. Executables stay FairPlay-encrypted, so the IPA installs only on devices using the purchasing Apple ID (or with AppSync). Needs nothing but SSH, and works for apps that can no longer launch, such as 32-bit apps on iOS 11+.
 - **Decrypted IPA** – an IPA with decrypted executables, made in one of two ways (*Settings → Decryption*): with two small helper programs run on the device, no Frida at all (*Native helper*, the default), or with Frida (*Frida*), which copies the installed app and decrypts its files on the device without running any of its code (*Direct decryption mode*) or launches the app and dumps it with [frida-ios-dump](https://github.com/AloneMonkey/frida-ios-dump) (*frida-ios-dump decryption mode*). Frida mode needs `frida-server` on the device.
 
+## Screenshots
+
+<p align="center"><img src="docs/screenshots/window.png" width="820" alt="The main window after an extraction: the app list with the result of Chrome, its details and the log"></p>
+
+<p align="center"><img src="docs/screenshots/extracting.png" width="820" alt="The main window while Chrome is being extracted: its row shows the progress, the bar fills"></p>
+
+<p align="center"><img src="docs/screenshots/settings.png" width="640" alt="Settings, Decryption page: Native helper selected, the Frida options greyed out"></p>
+
 ## Features
 
 - Works with rootful and rootless jailbreaks.
 - App list read over SSH with name, bundle ID, version, encryption state, 32/64-bit architecture, Team ID, signer and developer.
 - Filters (user apps, non-Apple apps, encrypted apps), search, and checkboxes with bulk actions, including *Check failed apps*, *Check partially decrypted apps* and *Check unextracted apps*.
 - Batch extraction with per-app status and an overall progress bar.
-- Every decrypted IPA is checked on the computer, executable by executable and slice by slice, and files still encrypted are decrypted on the device: with `mremap_encrypted` in frida-server's own process on iOS 15 and earlier, or on iOS 16 and later by having the system load the app and its extensions suspended (they never run) and reading the decrypted code from memory; encrypted frameworks are loaded into the app after letting it start without its UI.
-- Large decrypted batches stay stable: each launched app is closed after dumping, a stuck `frida-server` is detected, restarted and the app retried, and the batch pauses after repeated Frida failures.
+- Every decrypted IPA is checked on the computer, executable by executable, and files still encrypted are decrypted on the device (by file mapping on iOS 15 and earlier, from the memory of the suspended app on iOS 16 and later).
+- Large batches stay stable: apps are closed after dumping, a stuck `frida-server` is restarted, and the batch pauses after repeated Frida failures.
 - Configurable file names from `{name}`, `{bundle}`, `{version}`, `{build}` and `{type}`, with a preview and clash detection.
 - Separate or shared output folders for decrypted and original IPAs.
-- Native helper needs no Frida: two arm64 programs (`helpers/`, with their source and the workflow that builds them) are put on the device over SSH and decrypt every file of an app, its extensions and frameworks included. They are chosen by iOS version, or by hand.
-- Frida is connected through the same SSH session (no `ssh -L` or `iproxy` needed).
-- Built-in setup: downloads frida-ios-dump and installs the `frida` version that matches the device (or any other release you pick).
-- Several `frida` versions side by side: each device gets the one matching its frida-server, so devices with different Frida major versions can be used one after another in the same window, without reinstalling or restarting.
+- *Native helper* needs no Frida: two small arm64 programs (`helpers/`) are put on the device over SSH and decrypt every file of an app, extensions and frameworks included.
+- Built-in setup: downloads frida-ios-dump and installs the `frida` version that matches the device.
+- Several `frida` versions side by side: each device gets the one matching its frida-server.
 
 ## Requirements
 
@@ -34,7 +41,7 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi o
 
 **Computer**
 
-- Only to run from source (the downloadable program needs none): Python 3.9 or later; the window needs its tkinter module, the command line does not. The Python packages the tool needs ([Paramiko](https://www.paramiko.org/), [cryptography](https://cryptography.io/), and [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) on Linux) are installed on first start, after asking.
+- Only to run from source (the downloadable program needs none): Python 3.10 or later; the window needs PySide6 (Qt), the command line does not. The Python packages the tool needs ([Paramiko](https://www.paramiko.org/), [cryptography](https://cryptography.io/), and [PySide6](https://doc.qt.io/qtforpython-6/) for the window) are installed on first start, after asking.
 - For decrypted IPAs made with frida-ios-dump: Node.js (`npm install` fetches `frida-objc-bridge` for frida-ios-dump) and a copy of frida-ios-dump; the tool can download it for you. *Direct decryption mode* and *Native helper* need neither.
 
 ## Setting up the device
@@ -43,13 +50,13 @@ A desktop GUI for pulling IPA files off a jailbroken iPhone or iPad over Wi-Fi o
 2. **Install OpenSSH.** In the package manager, search for and install `OpenSSH`. It listens on port 22. (palera1n also ships its own dropbear SSH server on port 44.)
 3. **Choose the SSH account and password.**
    - **Rootful:** log in as `root`. Many rootful jailbreaks leave the well-known default password `alpine`; change it right away with `passwd` (and `passwd mobile` for the mobile account).
-   - **Rootless:** log in as `mobile`, with the password set for the mobile user (on Dopamine: *Settings → Change mobile password* in the Dopamine app; palera1n and the package managers ask for it when you first set up). The tool also gives this password to `sudo` when it needs to restart frida-server. Logging in as `root` works only after you give root its own password (`sudo passwd root`) and the SSH server allows root logins, so `mobile` is the simpler choice.
+   - **Rootless:** log in as `mobile`, with the password set for the mobile user (on Dopamine: *Settings → Change mobile password*). The tool also gives it to `sudo` when it needs root.
 4. **Install frida-server** (*Frida* only; the default *Native helper* does not need it). Add the source `https://build.frida.re` in the package manager and install `Frida`; the package manager picks the rootful or rootless build. It starts automatically.
 5. **Find the device IP** in *Settings → Wi-Fi → (i)* next to the network.
 
 Check the connection from a terminal with `ssh root@<device IP>` (rootful) or `ssh mobile@<device IP>` (rootless) before using the tool.
 
-The `frida` used on the computer must match the major version of frida-server on the device (e.g. 16.x with 16.x). The tool keeps each installed `frida` version in its own folder (`frida_versions/` next to the tool) and, on connecting, picks the device's exact version or else the newest one with the same major version. When none fits, it offers to install the device's version. *Settings → Decryption → Install Frida dependencies* lists the installed versions, adds others and deletes them.
+The `frida` on the computer must match the major version of frida-server on the device (e.g. 16.x with 16.x). Each installed version has its own folder; on connecting the tool picks the device's version or the newest with the same major, and offers to install one when none fits (*Settings → Decryption → Install Frida dependencies*).
 
 ## Getting started
 
@@ -113,12 +120,12 @@ The app itself is never modified: the settings are in `~/Library/Application Sup
 
 ### Run from source
 
-You need Python 3.9 or later (see [Requirements](#requirements)).
+You need Python 3.10 or later (see [Requirements](#requirements)).
 
 #### Windows
 
 1. Install Python from [python.org](https://www.python.org/downloads/) and tick *Add python.exe to PATH*.
-2. Double-click `ipa_extractor.bat`. If `paramiko` is missing, the tool offers to install it (with `pip install --user`, so no administrator rights are needed).
+2. Double-click `ipa_extractor.bat`. If PySide6 is missing, it offers to install it (`pip install PySide6-Essentials`); if `paramiko` is missing, the window offers to install it (with `pip install --user`, so no administrator rights are needed).
 
 #### Linux
 
@@ -126,14 +133,14 @@ You need Python 3.9 or later (see [Requirements](#requirements)).
 ./ipa_extractor.sh
 ```
 
-If Python's `venv` or `tkinter` (the window needs it) is missing, the script says so and, in a terminal, offers the command that installs it (Debian/Ubuntu `sudo apt-get install -y python3-venv python3-tk`, Fedora `sudo dnf install -y python3-tkinter`, and likewise for Arch, openSUSE) and runs it only if you answer `y`. The command line needs neither tkinter nor a window: with any argument the script installs the Python packages it lacks (`paramiko`, `cryptography`) into `./.venv` by itself.
+If Python's `venv` is missing, the script says so and, in a terminal, offers the command that installs it (Debian/Ubuntu `sudo apt-get install -y python3-venv`, and likewise for Fedora, Arch, openSUSE) and runs it only if you answer `y`. The script installs the window's toolkit (`PySide6-Essentials`) into `./.venv` by itself. The command line needs neither PySide6 nor a display: with any argument the script installs the Python packages it lacks (`paramiko`, `cryptography`) into `./.venv`. On a minimal Linux install Qt may need a few system libraries (on Debian/Ubuntu `sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0`).
 
-On first start the window offers to install its Python packages into `./.venv`, including [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) for a modern look. For Chinese, Japanese or Korean UI text, install a CJK font such as `fonts-noto-cjk`.
+On first start the window offers to install what is still missing of its Python packages into `./.venv`. For Chinese, Japanese or Korean UI text, install a CJK font such as `fonts-noto-cjk`.
 
 #### macOS
 
 ```sh
-brew install python python-tk   # or use the python.org installer, which includes Tk
+brew install python   # or use the python.org installer
 ./ipa_extractor.sh
 ```
 
@@ -143,34 +150,33 @@ brew install python python-tk   # or use the python.org installer, which include
 
 ### Usage
 
-1. Enter the device IP, SSH account (`root` or `mobile`, see above) and password, then click **Connect**. With *Connection* set to *USB cable* in Settings, choose the device in the USB device box (the one attached is chosen for you; **Refresh** lists them again) instead of entering an IP. The app list loads over SSH; Frida connects as well in *Frida* (with frida-ios-dump, once its folder is set up). The Frida status beside SSH is shown only then, not with *Native helper*.
-2. Check the apps you want (click ☐, double-click a row, or select rows and press Space).
+1. Enter the device IP, SSH account (`root` or `mobile`, see above) and password, then click **Connect**. With *Connection* set to *USB cable* in Settings, choose the device in the USB device box instead of entering an IP. The app list loads over SSH.
+2. Check the apps you want (click the check box, Shift-click for a range, double-click a row, or select rows and press Space or right-click; the box in the header checks every shown app).
 3. Click **Extract original IPA** or **Extract decrypted IPA**.
 
-Decrypted IPAs are made without Frida by default (*Native helper*): nothing needs installing, on the computer or on the device. In **Settings → Decryption** leave the helper on *Automatic* (file mapping up to iOS 15, process memory from iOS 16) or force one of them. File mapping is refused by iOS 16 and later: if you chose it for such a device, the *Decrypted IPA* button explains that and does nothing.
+Decrypted IPAs are made without Frida by default (*Native helper*): nothing needs installing. In **Settings → Decryption** leave the helper on *Automatic* (file mapping up to iOS 15, process memory from iOS 16) or force one of them. File mapping is refused by iOS 16 and later; the *Decrypted IPA* button says so.
 
-To use Frida instead, open **Settings → Decryption**, choose *Frida* and click *Install Frida dependencies* to add a `frida` version (the device's frida-server version is recommended); from source it runs `pip install --target` into that version's folder (the downloadable program unpacks the wheel instead). No restart is needed. To use frida-ios-dump, choose *frida-ios-dump decryption mode* under *Frida*: *Install frida-ios-dump* downloads the latest version from GitHub to a folder you choose, *Install Frida dependencies* also runs `npm install`, and the device must stay unlocked with the screen on.
+To use Frida instead, open **Settings → Decryption**, choose *Frida* and click *Install Frida dependencies* (the device's frida-server version is recommended). For frida-ios-dump choose *frida-ios-dump decryption mode*: *Install frida-ios-dump* downloads it to a folder you choose and *Install Frida dependencies* also runs `npm install`; the device must stay unlocked with the screen on.
 
 ### Settings
 
-| Tab | Options |
+| Page | Options |
 | --- | --- |
-| General | Language (*Automatic* follows the system), font (*Automatic* picks the best installed font for the language), text size, theme (*Follow system*, the default, picks light or dark when the tool starts; or *Light*, *Dark*, or *Black* with a pure black background). *Follow system* reads the setting of Windows, macOS, or GNOME and KDE on Linux, and uses light where it cannot tell |
-| Output | File name templates (default `{name}_{bundle}_{version}_{type}`), separate output folders (off by default: one folder, `output` next to the tool) |
-| Decryption | Decryption mode, two kinds. *Native helper* (no Frida; the default) with its helper: *Automatic*, *File mapping* or *Process memory* (each has a tooltip). *Frida* with *Direct decryption mode* (the app's code never runs, except its initialization code when iOS 16 and later need it for encrypted frameworks) or *frida-ios-dump decryption mode* (runs the app) with its own options, greyed out with the other mode: its folder (*Install frida-ios-dump* downloads it when the folder is not set up), decrypt files frida-ios-dump left encrypted (on by default), close each app after decrypting it; and the settings of both Frida modes: restart frida-server and retry on errors, Frida port, *Install Frida dependencies*. What does not belong to the chosen kind is greyed out. |
-| Connection | How the computer reaches the device: *SSH over the network* (the default; the device IP is entered in the main window) or *SSH over a USB cable* (the main window then shows a USB device box with each device's name, model and iOS version, and a **Refresh** button, instead of the IP; the SSH port, account and password stay) |
+| General | Language, font, text size, theme (*Follow system*, *Light*, *Dark*, or *Black* with a pure black background) |
+| Output | File name templates (default `{name}_{bundle}_{version}_{type}`), separate output folders |
+| Decryption | *Native helper* (the default; helper *Automatic*, *File mapping* or *Process memory*) or *Frida* (*Direct decryption mode* or *frida-ios-dump decryption mode*), with the options of the chosen mode; the others are greyed out |
+| Connection | *SSH over the network* (the default) or *SSH over a USB cable* (the main window then shows a USB device box instead of the IP) |
+| About | The version, the project page, the license, the system and libraries in use, where the settings are kept; **Copy information** puts it on the clipboard for a bug report |
 
-Defaults: SSH port 22 with no account, *Native helper* with the helper on *Automatic* (and *Direct decryption mode* as the Frida mode to return to), Frida port 27042, one output folder `output` next to the tool (separate folders are off), frida-ios-dump in a `frida-ios-dump` folder beside the tool's folder, *Automatic* language and font, text size 10 (13 on macOS), *Follow system* theme.
 
-`{type}` is `encrypted` (original IPA) or `original` (original IPA whose executable was never encrypted). For decrypted IPAs it follows a check of every executable in the IPA (main app, frameworks, app extensions, Watch app), done on the computer after each extraction: `decrypted` (all decrypted), `partial-decrypted-<architectures>` (some slices are still encrypted: the name lists the architectures of the main executable that are decrypted, e.g. `partial-decrypted-armv7` or `partial-decrypted-armv6-armv7`; the log and the details pane list the files and why) or `partial-decrypted` (no decrypted architecture to name). *Check partially decrypted apps* selects these apps.
+`{type}` is `encrypted` or `original` for original IPAs (`original` when the executable was never encrypted). For decrypted IPAs it follows a check of every executable, done after each extraction: `decrypted`, `partial-decrypted-<architectures>` (some slices of the main executable are still encrypted; the log and the details pane list the files and why) or `partial-decrypted`. *Check partially decrypted apps* selects these apps.
 
-Installed `frida` versions are kept in `frida_versions/` next to the tool (`~/.ipa_extractor/frida_versions` when the tool's folder is read-only); a `frida` installed in Python's own site-packages by version 1.0 is no longer used.
 
-Settings are stored in `settings.json` next to the tool, so they move with its folder; only values that differ from the defaults are written. If the tool's folder is read-only, `~/.ipa_extractor.json` (`%USERPROFILE%\.ipa_extractor.json` on Windows) is used instead. Delete the file to restore the defaults. *Remember password* stores the SSH password there in plain text.
+Settings are stored in `settings.json` next to the tool (`~/.ipa_extractor.json` when its folder is read-only); only values that differ from the defaults are written. Delete the file to restore the defaults. *Remember password* stores the SSH password there in plain text.
 
 ## CLI
 
-Everything the window does is also available without it, for scripts and servers: `ipa_cli.py` (or any arguments to `ipa_extractor.py` / `ipa_extractor.sh`; it needs the same Python packages but neither tkinter nor a display). It reads the device and the options from `settings.json`, the file the window saves, and options given on the command line override it.
+Everything the window does is also available without it, for scripts and servers: `ipa_cli.py` (or any arguments to `ipa_extractor.py` / `ipa_extractor.sh`; it needs the same Python packages but neither PySide6 nor a display). It reads the device and the options from `settings.json`, the file the window saves, and options given on the command line override it.
 
 How to start it:
 
@@ -202,14 +208,13 @@ python ipa_cli.py config show                           the settings; config set
 | `install-frida`, `install-frida-ios-dump` | What the window's *Install Frida dependencies* and *Install frida-ios-dump* buttons do |
 | `config` | `show`, `set KEY VALUE`, `reset KEY...`, `keys`, `path`: the same settings as the window, including the theme |
 
-The SSH password comes from `--password`, the `IPA_PASSWORD` variable, the saved one (*Remember password*), or a prompt. Progress goes to stderr, results to stdout. Files that exist are replaced only with `--overwrite` (or after asking in a terminal). Ctrl+C stops the batch (the file in progress is dropped, finished ones stay; one that is already in the repair keeps what was decrypted so far, named as partly decrypted); a second Ctrl+C quits at once. Exit status: 0 everything done, 1 something failed, 2 wrong usage or no connection, 3 done but some IPAs are partly encrypted, 130 cancelled. The messages of the extraction itself follow the language setting (`--lang` overrides it); the command line's own messages and help are English.
+The SSH password comes from `--password`, the `IPA_PASSWORD` variable, the saved one (*Remember password*), or a prompt. Progress goes to stderr, results to stdout. Files that exist are replaced only with `--overwrite`. Ctrl+C stops the batch (finished files stay); a second Ctrl+C quits at once. Exit status: 0 everything done, 1 something failed, 2 wrong usage or no connection, 3 done but some IPAs are partly encrypted, 130 cancelled.
 
 ## Limitations
 
-- **What iOS 16 and later can decrypt.** iOS 16 refuses `mremap_encrypted`, so only code the system itself loads on the device can be read: the app's executable and its extensions (each started suspended through a system process: SpringBoard, AuthenticationServicesAgent, Settings, which opens briefly, for Safari extensions, or, with frida-ios-dump, the running app itself). Encrypted frameworks are decrypted by loading them into the app: with *Direct decryption mode* the app is first let start with `UIApplicationMain` replaced, so it never shows its UI but its initialization code runs (the log says so), and an app that quits or crashes while starting keeps its frameworks encrypted. Watch apps, 32-bit slices and extensions that require a newer iOS stay encrypted. iOS 15 and earlier decrypt every file. Either way the app must have been installed with the device's own Apple ID; apps installed from an already decrypted or re-signed IPA have no key on the device. IPAs with files left encrypted are named `partial-decrypted`, and the log lists each file and why.
-- **iOS 8 and other old devices (frida 12).** Old SSH servers that only offer an `ssh-rsa` host key are accepted. `frida-server` 12.x needs `frida` 12.x on the computer, which has no wheel for current Pythons: on Windows x64 the tool installs it (*Install Frida dependencies*, or when it offers to on connecting) together with its own embeddable Python 3.8, in that version's folder. Only *Direct decryption mode* works with it (*frida-ios-dump* needs frida 16 or later). iOS 8 decrypts one cputype per file, so each slice of a fat file is decrypted from a copy of its own made in the device's `/var/tmp` (removed afterwards); 32-bit slices that are not 16 KB aligned are decrypted in the spawned app, whose code does not run. A slice that is older than the one the device runs (armv6 or armv7 in a fat file, on a 64-bit device) is refused by the kernel and stays encrypted; the app still works. 64-bit slices are decrypted first, and a file that cannot be decrypted from its copy (errno 12, seen with some app extensions) is retried where it is installed.
-- **Native helper.** The helpers are arm64 programs: devices that run only 32-bit code are not supported, and a 32-bit slice of an app is left encrypted. They need a jailbreak that accepts ad-hoc signed programs with entitlements (`task_for_pid-allow` and the like). *File mapping* (`mremap_decrypt`) covers every file of the app and starts nothing, but iOS 16 and later refuse it. *Process memory* (`memory_decrypt`) starts the app the way the system does, suspended (SpringBoard launches it; if that does not work an executable is started stopped at exec, which is the only way extensions are started), reads the main executable before any of its code runs, then lets the app run for a moment so dyld maps its frameworks (the app's initialization code runs) and reads those too; frameworks the app does not link are loaded into it with `dlopen`. Apps built for arm64e are not supported by that last step. A jailbreak that injects a library into every process (`DYLD_INSERT_LIBRARIES`) is worked around: the helper starts itself again without it. The tool uploads a helper under a name that contains its checksum and never writes over a file there (replacing a program in place made a jailbreak kill processes and panic the device); it does not compare the binaries with a list, so a helper you built yourself works too, and a helper that cannot be read or started shows a warning. See `helpers/README.md`.
-- Offloaded apps (*Settings → General → iPhone Storage → Offload App*) keep only a placeholder on the device. They are marked in the list and skipped; reinstall them from the App Store first.
+- **iOS 16 and later** refuse `mremap_encrypted`, so only code the system itself loads can be read: the app's executable and its extensions (started suspended). Encrypted frameworks are decrypted by loading them into the app, which is let start without showing its UI. Watch apps, 32-bit slices and extensions that need a newer iOS stay encrypted. The app must have been installed with the device's own Apple ID; IPAs with files left encrypted are named `partial-decrypted`, and the log lists each file and why.
+- **iOS 8 and other old devices (frida 12).** `frida-server` 12.x needs `frida` 12.x on the computer, which has no wheel for current Pythons: on Windows x64 the tool installs it with its own embeddable Python 3.8. Only *Direct decryption mode* works with it. Old SSH servers that only offer an `ssh-rsa` host key are accepted. Slices older than the one the device runs (armv6 or armv7 on a 64-bit device) are refused by the kernel and stay encrypted; the app still works.
+- **Native helper.** The helpers are arm64 programs: devices that run only 32-bit code are not supported, and a 32-bit slice is left encrypted. They need a jailbreak that accepts ad-hoc signed programs with entitlements. *File mapping* (`mremap_decrypt`) covers every file and starts nothing, but iOS 16 and later refuse it. *Process memory* (`memory_decrypt`) starts the app suspended, reads the main executable before any of its code runs, lets the app run for a moment so its frameworks load, and loads the others with `dlopen` (not for arm64e apps). See `helpers/README.md`.
 - Apps that crash on launch can only be decrypted with *Native helper* (file mapping) or *Direct decryption mode*; with frida-ios-dump, extract the original IPA instead.
 - On iOS 16 and later, frida-server 17 sometimes crashes while it holds an extension suspended. With *Restart frida-server and retry on errors* the tool restarts it and tries the affected files again (up to three more times, while that gets further); either way it lets go of whatever the crashed frida-server held suspended. Killing or stopping frida-server by hand many times in a row has left a device unable to start services until it was restarted.
 
@@ -221,10 +226,11 @@ Each language is a JSON file in `locales/` named by its language tag, e.g. `ja.j
 
 | File | Purpose |
 | --- | --- |
-| `ipa_extractor.py` | Tkinter GUI |
+| `ipa_extractor.py` | Entry point: starts the window, or the command line when it gets arguments |
+| `gui/` | The window (PySide6): main window, Settings (with About), the Frida install window, themes, the app list |
 | `device_models.json` | Marketing names of iPhone, iPad and iPod models by identifier (iPhone12,1 is iPhone 11); radio and region variants share a name. A model that is not listed shows its identifier, so add a line for a new device |
 | `usbmux.py` | A small usbmuxd client: lists the devices on USB and carries SSH through the cable (like `iproxy`, without needing it) |
-| `engine.py` | What needs no window: settings, SSH, and the engine (`DumpEngine`) that copies and decrypts apps; shared by the GUI and the CLI, never imports tkinter |
+| `engine.py` | What needs no window: settings, SSH, and the engine (`DumpEngine`) that copies and decrypts apps; shared by the GUI and the CLI, never imports Qt |
 | `ipa_cli.py` | Command line: the same features without the window |
 | `ipa_extractor.bat`, `ipa_extractor.sh` | Launchers for Windows and Linux/macOS |
 | `app_paths.py`, `workers.py` | For the program built without Python: where it keeps its files, and the mode in which it runs its own helper processes |
@@ -249,17 +255,30 @@ Each language is a JSON file in `locales/` named by its language tag, e.g. `ja.j
 
 ## Third-party software
 
-IPA Extractor does not bundle any of these (apart from its own helpers in `helpers/`); they are installed separately.
+The downloadable programs contain the first group below (compiled into them with Nuitka; the Qt libraries are separate
+files inside the program). From source, these are installed with pip instead. The second group is not part of IPA
+Extractor: each is downloaded when it is used. The licenses are those the packages declare (checked against the versions
+the release is built with). The *About* page of Settings lists them, and its *Licenses* button shows the full license
+texts, so a download is a single file; `licenses.txt` holds those texts.
 
-| Software | Used for | License |
-| --- | --- | --- |
-| [Paramiko](https://www.paramiko.org/) | SSH and SFTP | LGPL-2.1 |
-| [cryptography](https://cryptography.io/) | Reading code signature certificates | Apache-2.0 or BSD-3-Clause |
-| [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme) | UI theme on Linux | MIT |
-| [Frida](https://frida.re/) (`frida` Python package, `frida-server`) | Launching and decrypting apps | wxWindows Library Licence 3.1 |
-| [frida-ios-dump](https://github.com/AloneMonkey/frida-ios-dump) | Dumping decrypted IPAs | MIT |
-| [scp](https://github.com/jbardin/scp.py) | File transfer used by frida-ios-dump | LGPL-2.1-or-later |
-| [frida-objc-bridge](https://github.com/frida/frida-objc-bridge) | Objective-C runtime access used by frida-ios-dump | LGPL-2.0 with wxWindows exception 3.1 |
+| Software | Used for | License | In the downloadable program |
+| --- | --- | --- | --- |
+| [PySide6 / Qt 6](https://doc.qt.io/qtforpython-6/) | The window | LGPL-3.0 (PySide6 is "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"; this project uses it under the LGPL) | yes, as separate library files |
+| [Paramiko](https://www.paramiko.org/) | SSH and SFTP | LGPL-2.1 | yes |
+| [scp](https://github.com/jbardin/scp.py) | File transfer used by frida-ios-dump | LGPL-2.1-or-later | yes |
+| [cryptography](https://cryptography.io/) | Reading code signature certificates | Apache-2.0 or BSD-3-Clause (its wheel carries OpenSSL, Apache-2.0) | yes |
+| [bcrypt](https://github.com/pyca/bcrypt), [PyNaCl](https://github.com/pyca/pynacl) (with libsodium, ISC), [cffi](https://cffi.readthedocs.io/) (MIT-0, with libffi, MIT), pycparser (BSD-3-Clause) | Paramiko's own dependencies | Apache-2.0 / ISC / MIT-0 / MIT / BSD-3-Clause | yes |
+| Python | The program itself | PSF License | yes |
+| Microsoft Visual C++ runtime | Needed by Python and Qt on Windows | Microsoft's redistributable terms | yes (Windows only) |
+| [Frida](https://frida.re/) (`frida` Python package, `frida-server`) | Launching and decrypting apps | wxWindows Library Licence 3.1 | no, downloaded when you install it in Settings |
+| [frida-ios-dump](https://github.com/AloneMonkey/frida-ios-dump) | Dumping decrypted IPAs | MIT | no, downloaded when you install it in Settings |
+| [frida-objc-bridge](https://github.com/frida/frida-objc-bridge) | Objective-C runtime access used by frida-ios-dump | LGPL-2.0 with wxWindows exception 3.1 | no, comes with frida-ios-dump |
+
+Qt, Paramiko and scp are under the LGPL. This project's source is public and `build.py` rebuilds the program, so it can
+be built again with another version of these libraries; the Qt libraries are separate files (in the single-file builds
+they are unpacked when the program starts) and can be exchanged for another build of the same Qt version. Whether that
+satisfies the LGPL for a single-file program is a legal question this project has not had answered; if it matters to you,
+use the source or ask a lawyer. Qt itself contains code under other open-source licenses (see https://doc.qt.io/qt-6/licenses-used-in-qt.html).
 
 The helpers in `helpers/` are this project's own code (MIT). How `memory_decrypt` starts an app, reads its memory and calls `dlopen` in it was worked out with the help of the device-side code of [ipadecrypt](https://github.com/londek/ipadecrypt) (MIT), which solves the same problem; none of its code is copied.
 

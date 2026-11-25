@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Build the release program with Nuitka: python build.py [--output DIR]
 
-Needs `pip install nuitka paramiko cryptography scp` (plus sv-ttk on Linux) in the Python that runs it, a C compiler,
+Needs `pip install nuitka paramiko cryptography scp PySide6-Essentials` in the Python that runs it, a C compiler,
 and on Linux patchelf. The result is a folder (a .app on macOS) that runs without Python; the release workflow
 (.github/workflows/release.yml) zips it for each platform. Frida is not part of it: the program downloads the
 version a device needs (see frida_versions.py).
@@ -27,12 +27,13 @@ def command(output):
     import engine
     version = engine.__version__
     args = [sys.executable, '-m', 'nuitka', '--standalone', '--assume-yes-for-downloads',
-            '--enable-plugin=tk-inter', '--output-dir=' + output, '--output-filename=IPA-Extractor',
+            '--enable-plugin=pyside6', '--output-dir=' + output, '--output-filename=IPA-Extractor',
             '--product-name=' + NAME, '--file-version=' + '.'.join((version.split('.') + ['0'] * 4)[:4]),
             '--company-name=IPA Extractor', '--file-description=' + NAME,
             '--include-data-dir=locales=locales', '--include-data-dir=helpers/bin=helpers/bin',
             '--include-data-dir=assets=assets', '--include-data-files=device_models.json=device_models.json',
-            '--include-data-files=repair_agent.js=repair_agent.js', '--nofollow-import-to=frida,frida_tools']
+            '--include-data-files=repair_agent.js=repair_agent.js', '--include-data-files=licenses.txt=licenses.txt', '--include-data-files=gui/check.svg=gui/check.svg', '--include-data-files=gui/check_disabled.svg=gui/check_disabled.svg',
+            '--nofollow-import-to=frida,frida_tools']
     # An old frida (12, 13) runs with a Python 3.8 of its own, which cannot start the compiled program in worker
     # mode: it runs these two scripts as files. Only the standard library is imported by them.
     args += ['--include-data-files={0}={0}'.format(name) for name in ('frida_probe.py', 'repair_worker.py')]
@@ -46,8 +47,6 @@ def command(output):
             args.append('--macos-app-icon=assets/icon.icns')
     else:
         args.append('--onefile')                        # one file (a .app is already one item)
-    if sys.platform.startswith('linux'):
-        args.append('--include-package-data=sv_ttk')   # the Tk theme of the window on Linux
     return args + ['ipa_extractor.py']
 
 
