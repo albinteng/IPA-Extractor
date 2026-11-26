@@ -535,11 +535,10 @@ class WindowTests(unittest.TestCase):
         self.assertIn(self.gui.t('inst_latest', version='17.0.0'), texts(window))
         window.close()
 
-    def test_file_mapping_on_ios_16_is_explained_and_nothing_starts(self):
+    def test_file_mapping_on_ios_16_is_not_refused(self):
         error, prepare = self.dump_with('mremap', 'iOS 16.1.2')
-        error.assert_called_once()
-        self.assertIn('16.1.2', error.call_args[0][1])
-        prepare.assert_not_called()
+        error.assert_not_called()
+        prepare.assert_called_once()
 
     def test_an_unreadable_helper_warns_and_nothing_starts(self):
         with mock.patch.object(engine.native_decrypt, 'local_helper',

@@ -5,7 +5,7 @@ Native helper mode*). They run as root, over the tool's SSH connection.
 
 | Helper | What it does | iOS |
 | --- | --- | --- |
-| `mremap_decrypt` | Asks the kernel to decrypt the encrypted range of one slice of an installed file with `mremap_encrypted()`; nothing is started. Called once per slice, the range goes to standard output. | 15 and earlier (16 and later refuse it) |
+| `mremap_decrypt` | Asks the kernel to decrypt the encrypted range of one slice of an installed file with `mremap_encrypted()`; nothing is started. Called once per slice, the range goes to standard output. | any; on 16 and later only ranges that start on a 16 KB boundary (otherwise `memory_decrypt`, chosen by *Automatic*) |
 | `memory_decrypt` | Starts the app the way the system does, reads the decrypted code from its memory, kills it. One call per app. See the comment at the top of `src/memory_decrypt.c`. | any that lets a root process get a task port (needed from 16) |
 
 ## Files

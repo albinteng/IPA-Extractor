@@ -47,7 +47,7 @@ WORKER = os.path.join(script_dir, 'dump_worker.py')
 REPAIR_WORKER = os.path.join(script_dir, 'repair_worker.py')
 REPAIR_STALL = 90     # seconds without output after which repair_worker.py counts as hung
 REPAIR_RETRIES = 3    # times frida-server is restarted for one app's files, while each try gets further
-MEMORY_FROM_IOS = 16  # mremap_encrypted is refused from iOS 16 on; the system loads the code instead
+MEMORY_FROM_IOS = 16  # from iOS 16 on, "auto" maps the files of an app only when every encrypted range starts on a page, else reads memory
 PROBE = os.path.join(script_dir, 'frida_probe.py')
 PROBE_TIMEOUT = 30
 ASSETS = os.path.join(script_dir, 'assets')
@@ -1063,7 +1063,7 @@ class DumpEngine:
         try:
             native_decrypt.run(device, helper, bundle, self.apps[bundle]['path'], jobs, work, report,
                                log=lambda text: self.post(self.log, '[{}] {}'.format(bundle, text)),
-                               cancelled=self.cancel_requested.is_set)
+                               cancelled=self.cancel_requested.is_set, auto=options.get('native_auto', False))
         except native_decrypt.HelperError as error:
             self.post(self.helper_problem, str(error))
             for job in jobs:

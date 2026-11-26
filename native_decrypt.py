@@ -7,9 +7,11 @@ where ipa_repair.apply() picks them up.
 
 Two helpers, both arm64 programs run as root over SSH (sources in helpers/src, see helpers/README.md):
 
-* mremap_decrypt (iOS 15 and earlier): asks the kernel to decrypt the range of one slice of the installed file with
-  mremap_encrypted(); no app is started. One call per slice.
-* memory_decrypt (any iOS that lets a root process get a task port; needed from iOS 16 on): starts the app the way the
+* mremap_decrypt: asks the kernel to decrypt the range of one slice of the installed file with mremap_encrypted();
+  no app is started. One call per slice. iOS 15 and earlier take any range; iOS 16 and later only a range that starts
+  on a 16 KB boundary (the helper asks for model encryption there): the others fail and stay encrypted.
+* memory_decrypt (any iOS that lets a root process get a task port; what iOS 16 and later need for the files file
+  mapping cannot do, and what "auto" uses there for such an app): starts the app the way the
   system does, suspended, and reads the decrypted code from its memory; app extensions are started stopped at exec,
   frameworks the app did not link are loaded into it with dlopen. One call per app.
 
@@ -30,7 +32,8 @@ import uuid
 AUTO, MREMAP, MEMORY = 'auto', 'mremap', 'memory'
 CHOICES = (AUTO, MREMAP, MEMORY)
 BINARIES = {MREMAP: 'mremap_decrypt', MEMORY: 'memory_decrypt'}
-MEMORY_FROM_IOS = 16      # mremap_encrypted is refused from iOS 16 on
+MEMORY_FROM_IOS = 16      # from iOS 16 on, file mapping decrypts only ranges that start on a page (see mappable)
+PAGE_SIZE = 16384         # the page size of every device that runs iOS 16 (A9 and later)
 HELPER_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'helpers', 'bin')
 # Where the helpers are put on the device: the first folder a helper can be run from.
 REMOTE_DIRS = ('/var/tmp/ipa_extractor_helpers', '/var/mobile/Media/ipa_extractor_helpers')
@@ -59,9 +62,16 @@ def choose(value, ios_major):
     return MEMORY if ios_major is not None and ios_major >= MEMORY_FROM_IOS else MREMAP
 
 
-def refused(value, ios_major):
-    """True when the user picked file mapping on an iOS that refuses it (16 and later)."""
-    return setting(value) == MREMAP and ios_major is not None and ios_major >= MEMORY_FROM_IOS
+def auto_maps(value, ios_major):
+    """True when "auto" is chosen on an iOS where file mapping works for some apps (16 and later): those whose files
+    it can decrypt use it, the others the process memory (see run)."""
+    return setting(value) == AUTO and ios_major is not None and ios_major >= MEMORY_FROM_IOS
+
+
+def mappable(jobs):
+    """Whether file mapping can decrypt every encrypted range of the jobs on iOS 16 and later: the kernel takes only a
+    range that starts on a page boundary, and the blocks in front of one that does not cannot be decrypted."""
+    return all((slice_.offset + slice_.cryptoff) % PAGE_SIZE == 0 for job in jobs for slice_ in job.slices)
 
 
 def local_helper(method, directory=HELPER_DIR):
@@ -400,8 +410,20 @@ def run_memory(device, bundle, app_path, jobs, work, report, log=lambda text: No
             device.remove(out)
 
 
-def run(device, method, bundle, app_path, jobs, work, report, log=lambda text: None, cancelled=lambda: False):
-    """Decrypt jobs with the chosen helper (MREMAP or MEMORY)."""
+def run(device, method, bundle, app_path, jobs, work, report, log=lambda text: None, cancelled=lambda: False,
+        auto=False):
+    """Decrypt jobs with the chosen helper (MREMAP or MEMORY).
+
+    auto (the user left the choice to the program, on iOS 16 or later): an app whose files file mapping can all decrypt
+    is mapped, so that it is not started; any other app is read from its memory. A helper the user picked is never
+    replaced by the other one."""
+    if auto and method == MEMORY and jobs and mappable(jobs):
+        try:
+            local_helper(MREMAP)
+        except HelperError:
+            pass
+        else:
+            method = MREMAP
     if method == MREMAP:
         run_mremap(device, jobs, work, report, cancelled)
     else:

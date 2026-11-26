@@ -492,15 +492,13 @@ class Cli(core.DumpEngine):
                                                                   core.ios_major(self.device_os)))
             except native_decrypt.HelperError as error:
                 raise CliError(self.t('m_helper', error=error).split('\n\n')[0] + ' ' + str(error))
-        if native and native_decrypt.refused(args.helper or c['native_helper'], core.ios_major(self.device_os)):
-            # The first paragraph says why; the choice it ends with is named by option here.
-            raise CliError(self.t('m_mremap', version=native_decrypt.version_text(self.device_os)).split('\n\n')[0]
-                           + ' Use --helper auto or --helper memory.')
         helper = native_decrypt.choose(args.helper or c['native_helper'], core.ios_major(self.device_os)) if native else None
         if not self.host:
             self.host, self.port, _, _ = self.connection()
         host, port = self.host, self.port
         options = dict(direct=direct, native=helper, method=helper or core.decrypt_method(self.device_os),
+                       native_auto=bool(native) and native_decrypt.auto_maps(args.helper or c['native_helper'],
+                                                                             core.ios_major(self.device_os)),
                        host=host, port=str(port), user=self.user, password=self.password,
                        frida='127.0.0.1:{}'.format(self.tunnel.local_port) if self.tunnel else None,
                        frida_version=self.frida_version, outdir=outdir, dump_dir=dump_dir,

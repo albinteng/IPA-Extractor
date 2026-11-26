@@ -398,23 +398,8 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(done.stdout.strip().endswith('.json'))
         self.assertNotIn('PySide6', sys.modules.get('engine').__dict__)
 
-    def test_file_mapping_is_refused_on_ios_16_before_anything_runs(self):
-        for argv in (['--helper', 'mremap'], []):
-            cli = make_cli('decrypt', '--mode', 'native', *argv, 'com.a.alpha',
-                           settings={} if argv else {'native_helper': 'mremap'})
-            cli.user, cli.password, cli.ssh = 'mobile', 'pw', mock.Mock()
-            cli.prepare_output = lambda kind, jobs, names: (cli.folder, jobs)
-            cli._dump_worker = mock.Mock()
-            with mock.patch.object(ipa_cli.native_decrypt, 'Device') as device:
-                device.return_value.ios_version.return_value = '16.1.2'
-                with self.assertRaises(ipa_cli.CliError) as caught:
-                    cli.run_decrypt([cli.apps['com.a.alpha']])
-            self.assertIn('--helper memory', str(caught.exception))
-            self.assertIn('16.1.2', str(caught.exception))
-            cli._dump_worker.assert_not_called()
-
-    def test_file_mapping_on_ios_15_and_the_other_helpers_run(self):
-        for ios, helper in (('15.8', 'mremap'), ('16.1.2', 'auto'), ('17.0', 'memory')):
+    def test_file_mapping_on_ios_15_and_16_and_the_other_helpers_run(self):
+        for ios, helper in (('15.8', 'mremap'), ('16.1.2', 'mremap'), ('16.1.2', 'auto'), ('17.0', 'memory')):
             cli = make_cli('decrypt', '--mode', 'native', '--helper', helper, 'com.a.alpha')
             cli.user, cli.password, cli.ssh = 'mobile', 'pw', mock.Mock()
             cli.settings.update(host='10.0.0.2', user='mobile', password='pw')

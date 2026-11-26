@@ -31,13 +31,10 @@ class ChoiceTests(unittest.TestCase):
         self.assertEqual(native_decrypt.choose('memory', 12), native_decrypt.MEMORY)
         self.assertEqual(native_decrypt.choose('mremap', 17), native_decrypt.MREMAP)
 
-    def test_file_mapping_is_refused_from_ios_16(self):
-        self.assertTrue(native_decrypt.refused('mremap', 16))
-        self.assertTrue(native_decrypt.refused('mremap', 18))
-        self.assertFalse(native_decrypt.refused('mremap', 15))
-        self.assertFalse(native_decrypt.refused('mremap', None))
-        self.assertFalse(native_decrypt.refused('auto', 17))
-        self.assertFalse(native_decrypt.refused('memory', 17))
+    def test_file_mapping_can_be_chosen_on_ios_16_but_auto_still_reads_memory(self):
+        self.assertEqual(native_decrypt.choose('mremap', 16), native_decrypt.MREMAP)
+        self.assertEqual(native_decrypt.choose('auto', 16), native_decrypt.MEMORY)
+        self.assertFalse(hasattr(native_decrypt, 'refused'))
 
     def test_unknown_settings_mean_auto(self):
         for value in ('', None, 'frida', 'MEMORY'):
@@ -116,6 +113,67 @@ class FakeDevice:
     def run(self, command, timeout=60, cancelled=None, kill=None):
         self.commands.append(command)
         return self.responder(command)
+
+
+class RoutingTests(unittest.TestCase):
+    """Which helper decrypts an app on iOS 16 and later: "auto" maps the app whose ranges all start on a page, a helper
+    the user picked is never swapped for the other one."""
+
+    ALIGNED = [job([slice_(offset=0, cryptoff=0x4000)])]
+    UNALIGNED = [job([slice_(offset=0, cryptoff=0x4000)]), job([slice_(offset=0, cryptoff=0x57000)])]
+
+    def route(self, jobs, method, auto):
+        with mock.patch.object(native_decrypt, 'run_mremap') as mapped,                 mock.patch.object(native_decrypt, 'run_memory') as memory:
+            native_decrypt.run('device', method, 'com.x.app', '/app', jobs, '/work', lambda *a: None, auto=auto)
+        return mapped.called, memory.called
+
+    def test_only_auto_on_ios_16_and_later_maps_some_apps(self):
+        self.assertTrue(native_decrypt.auto_maps('auto', 16))
+        self.assertTrue(native_decrypt.auto_maps('auto', 26))
+        self.assertFalse(native_decrypt.auto_maps('auto', 15))
+        self.assertFalse(native_decrypt.auto_maps('auto', None))
+        self.assertFalse(native_decrypt.auto_maps('memory', 17))
+        self.assertFalse(native_decrypt.auto_maps('mremap', 17))
+
+    def test_a_range_must_start_on_a_16k_page(self):
+        self.assertTrue(native_decrypt.mappable([job([slice_(offset=0x8000, cryptoff=0x4000)])]))
+        self.assertFalse(native_decrypt.mappable([job([slice_(offset=0, cryptoff=0x57000)])]))
+        self.assertFalse(native_decrypt.mappable([job([slice_(offset=0x1000, cryptoff=0x4000)])]))
+        self.assertFalse(native_decrypt.mappable([job([slice_(), slice_(cryptoff=0x1000)])]))
+
+    def test_auto_maps_an_app_whose_files_all_start_on_a_page(self):
+        self.assertEqual(self.route(self.ALIGNED, native_decrypt.MEMORY, auto=True), (True, False))
+
+    def test_auto_reads_the_memory_of_an_app_with_one_range_off_the_page(self):
+        self.assertEqual(self.route(self.UNALIGNED, native_decrypt.MEMORY, auto=True), (False, True))
+
+    def test_auto_reads_the_memory_when_the_mapping_helper_is_missing(self):
+        with mock.patch.object(native_decrypt, 'local_helper', side_effect=native_decrypt.HelperError('gone')):
+            self.assertEqual(self.route(self.ALIGNED, native_decrypt.MEMORY, auto=True), (False, True))
+
+    def test_a_picked_memory_helper_is_never_replaced(self):
+        self.assertEqual(self.route(self.ALIGNED, native_decrypt.MEMORY, auto=False), (False, True))
+
+    def test_a_picked_mapping_helper_is_never_replaced(self):
+        self.assertEqual(self.route(self.UNALIGNED, native_decrypt.MREMAP, auto=False), (True, False))
+
+    def test_a_file_the_mapping_cannot_do_is_reported_and_the_others_go_on(self):
+        failing = 'mremap_encrypted failed: the range starts at 0x58000, which is not on a 16384-byte page boundary (errno 22)'
+
+        def responder(command):
+            return (1, b'', failing) if ' 360448 ' in command else (0, b'abcd', '')
+
+        jobs = [job([slice_(cryptoff=0x58000, cryptsize=4)], device_path='/a/First'),
+                job([slice_(cryptoff=0x4000, cryptsize=4)], device_path='/a/Second')]
+        jobs[1].id = '1'
+        device = FakeDevice(responder)
+        reports = []
+        with tempfile.TemporaryDirectory() as work:
+            native_decrypt.run(device, native_decrypt.MREMAP, 'com.x.app', '/a', jobs, work,
+                               lambda j, i, e: reports.append((j.id, e)), auto=False)
+        self.assertEqual([r[0] for r in reports], ['0', '1'])
+        self.assertIn('page boundary', reports[0][1])
+        self.assertIsNone(reports[1][1])
 
 
 class MremapTests(unittest.TestCase):

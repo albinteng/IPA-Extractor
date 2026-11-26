@@ -1404,9 +1404,6 @@ class MainWindow(DumpEngine, QMainWindow):
             except native_decrypt.HelperError as error:
                 dialogs.showwarning(self.t('m_helper_t'), self.t('m_helper', error=error))
                 return
-        if native and native_decrypt.refused(self.var_native_helper.get(), ios_major(self.device_os)):
-            dialogs.showerror(self.t('m_mremap_t'), self.t('m_mremap', version=native_decrypt.version_text(self.device_os)))
-            return
         if not native and (self.frida_version is None or self.tunnel is None):
             self.connect_frida(then=self.start_dump)
             return
@@ -1425,6 +1422,7 @@ class MainWindow(DumpEngine, QMainWindow):
         try:
             # The overwrite question may have stayed open while the connection dropped: nothing is left to read here.
             options = dict(direct=direct, native=helper, method=helper or decrypt_method(self.device_os),
+                           native_auto=bool(native) and native_decrypt.auto_maps(self.var_native_helper.get(), ios_major(self.device_os)),
                            host=self.endpoint[0], port=str(self.endpoint[1]),
                            user=self.var_user.get().strip(), password=self.var_password.get(),
                            frida='127.0.0.1:{}'.format(self.tunnel.local_port) if self.tunnel else None,
