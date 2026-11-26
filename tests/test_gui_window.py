@@ -126,6 +126,40 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(gui.var_connection.get(), 'usb')
         gui.settings_close()
 
+    def test_a_chosen_radio_button_cannot_be_switched_off_by_clicking_it(self):
+        """Each radio button sits in a frame of its own, where Qt does not keep one on: a click on the chosen one used to
+        leave the connection, the decryption mode or the helper with nothing chosen."""
+        gui = self.gui
+        gui.open_settings()
+        for page in ('tab_connection', 'tab_decrypt'):
+            self.select_page(page)
+            radios = [r for r in self.settings_widgets(QRadioButton) if r.isVisibleTo(gui.settings_window)]
+            chosen = [r for r in radios if r.isChecked()]
+            self.assertTrue(chosen, page)
+            for radio in chosen:
+                radio.click()
+                radio.click()
+                pump(0.02)
+                self.assertTrue(radio.isChecked(), '{}: {}'.format(page, radio.text()))
+        def state():
+            self.select_page('tab_connection')
+            return tuple(next(r for r in self.settings_widgets(QRadioButton) if r.text() == gui.t(key)).isChecked()
+                         for key in ('conn_ssh', 'conn_usb'))
+
+        def click(key):
+            self.select_page('tab_connection')
+            next(r for r in self.settings_widgets(QRadioButton) if r.text() == gui.t(key)).click()
+            pump(0.1)
+
+        with mock.patch.object(engine.usbmux, 'list_devices', return_value=[]):
+            click('conn_usb')
+            self.assertEqual(state(), (False, True))
+            click('conn_usb')
+            self.assertEqual(state(), (False, True))
+            click('conn_ssh')
+            self.assertEqual(state(), (True, False))
+        gui.settings_close()
+
     def test_the_connection_choices_explain_themselves_on_the_page(self):
         gui = self.gui
         for name in ('ssh', 'usb'):

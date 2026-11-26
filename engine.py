@@ -3,7 +3,7 @@
 """The part of IPA Extractor that needs no window: settings, the SSH connection, and DumpEngine, which copies and
 decrypts apps. The window (gui/) and the command line (ipa_cli.py) both build on it; it never imports Qt."""
 
-__version__ = '5.0'
+__version__ = '5.1'
 APP_NAME = 'IPA Extractor'
 PROJECT_URL = 'https://github.com/albinteng/IPA-Extractor'
 

@@ -106,6 +106,12 @@ def bind_radio(button, var, value, command=None):
             var.set(value)
             if command is not None:
                 command()
+        elif var.get() == value:
+            # Each radio button sits alone in its own frame, so Qt does not keep one of them on and a click on the
+            # chosen one switches it off. A choice is only ever replaced by another choice: put it back.
+            button.blockSignals(True)
+            button.setChecked(True)
+            button.blockSignals(False)
     button.toggled.connect(toggled)
 
     def from_var():
