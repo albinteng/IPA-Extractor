@@ -19,10 +19,11 @@
 
 typedef int (*mremap_encrypted_fn)(void *, size_t, uint32_t, uint32_t, uint32_t);
 
-#define TIMEOUT_SECONDS 300     // the tool gives up after 600; a call stuck in the kernel must not wait that long
+#define TIMEOUT_SECONDS 300     // the tool gives up after 600
 
-// Reading the mapping after mremap_encrypted() can fault (SIGBUS) when a page cannot be decrypted, and a stuck call
-// would never end: both would leave the tool with only an exit status. Say what happened instead.
+// Reading the mapping after mremap_encrypted() can fault (SIGBUS) when a page cannot be decrypted, and a call can stay
+// stuck: both would leave the tool with only an exit status. Say what happened instead. The alarm cannot end a thread
+// that waits inside the kernel (state U); it ends what can be interrupted.
 static void on_signal(int sig) {
     const char *text = sig == SIGALRM ? "timed out: the kernel did not answer in 300 seconds\n"
                                       : "reading the decrypted range faulted (SIGBUS/SIGSEGV)\n";
@@ -71,6 +72,15 @@ int main(int argc, char **argv) {
     uint64_t delta = start - aligned;
     uint64_t length = cryptsize + delta;
 
+    if (delta != 0) {
+        // The kernel takes only a page-aligned address (it answers EINVAL otherwise), so a range that starts inside a
+        // page cannot be decrypted: say so without asking.
+        fprintf(stderr, "mremap_encrypted failed: the range starts at 0x%llx, which is not on a %llu-byte page boundary (errno 22)\n",
+                (unsigned long long)start, (unsigned long long)page);
+        close(fd);
+        return 1;
+    }
+
     void *mapped = mmap(NULL, (size_t)length, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, (off_t)aligned);
     if (mapped == MAP_FAILED) {
         int rc = fail("mmap");
@@ -98,6 +108,12 @@ int main(int argc, char **argv) {
         ssize_t n = write(ofd, data + done, chunk);
         if (n < 0) {
             if (errno == EINTR) continue;
+            int rc = fail("write");
+            munmap(mapped, (size_t)length);
+            return rc;
+        }
+        if (n == 0) {   // a write that takes nothing would loop for ever
+            errno = EIO;
             int rc = fail("write");
             munmap(mapped, (size_t)length);
             return rc;
