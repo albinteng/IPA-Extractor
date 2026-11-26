@@ -1,7 +1,7 @@
 // memory_decrypt (see the end of this file for the command line): decrypts an installed app's FairPlay-encrypted executables by letting the system map them
 // (as the kernel does for any process) and reading the decrypted code out of a suspended process.
-// For iOS 16 and later, where mremap_encrypted() from a helper is refused (see mremap_decrypt.c for iOS 15 and
-// earlier).
+// For the apps that mremap_encrypted() from a helper cannot decrypt, which on iOS 16 and later are those with an
+// encrypted range that does not start on a page (see mremap_decrypt.c).
 //
 //   memory_decrypt dump [--no-run] [--bundle-id ID] <exec_path> <bundle_root> <out_root>
 //

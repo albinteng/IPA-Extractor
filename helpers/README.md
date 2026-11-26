@@ -40,7 +40,7 @@ writes only the decrypted ranges (`<relative path>.range`) instead of copies of 
 
 ## Known limits
 
-- arm64 only. Slices for other architectures are not decrypted.
+- The helpers are arm64 programs, so they run on arm64 devices only.
 - `memory_decrypt` lets the app run for a moment so that dyld maps its frameworks, so the app's initialization code runs.
   The main executable and app extensions are read before any of their code runs.
 - Frameworks the app does not link are loaded into it with `dlopen`; that is not supported for arm64e apps.
